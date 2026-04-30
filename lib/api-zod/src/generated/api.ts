@@ -59,11 +59,12 @@ export const ListStrategiesResponse = zod.object({
       tagline: zod.string(),
       description: zod.string(),
       category: zod.enum([
+        "smc",
         "trend",
         "mean_reversion",
         "breakout",
-        "momentum",
-        "moonshot",
+        "orderflow",
+        "advanced",
       ]),
       risk: zod.enum(["low", "medium", "high", "extreme"]),
       params: zod.array(
@@ -78,6 +79,16 @@ export const ListStrategiesResponse = zod.object({
           description: zod.string().optional(),
         }),
       ),
+      available: zod
+        .boolean()
+        .optional()
+        .describe(
+          "false when the strategy requires data not available in this lab (e.g. order book, funding, second asset)",
+        ),
+      unavailableReason: zod
+        .string()
+        .optional()
+        .describe("Human-readable reason when available=false"),
     }),
   ),
 });
@@ -171,7 +182,15 @@ export const RunBacktestBody = zod.object({
     .min(runBacktestBodyWalkForwardSplitMin)
     .max(runBacktestBodyWalkForwardSplitMax)
     .default(runBacktestBodyWalkForwardSplitDefault)
-    .describe("Fraction used for in-sample (rest is out-of-sample)"),
+    .describe(
+      "Fraction used for in-sample (rest is out-of-sample). Ignored if walkForwardSplitDate is set.",
+    ),
+  walkForwardSplitDate: zod
+    .string()
+    .optional()
+    .describe(
+      "ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present.",
+    ),
 });
 
 export const runBacktestResponseRequestLookbackDaysMin = 7;
@@ -264,7 +283,15 @@ export const RunBacktestResponse = zod.object({
       .min(runBacktestResponseRequestWalkForwardSplitMin)
       .max(runBacktestResponseRequestWalkForwardSplitMax)
       .default(runBacktestResponseRequestWalkForwardSplitDefault)
-      .describe("Fraction used for in-sample (rest is out-of-sample)"),
+      .describe(
+        "Fraction used for in-sample (rest is out-of-sample). Ignored if walkForwardSplitDate is set.",
+      ),
+    walkForwardSplitDate: zod
+      .string()
+      .optional()
+      .describe(
+        "ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present.",
+      ),
   }),
   metrics: zod.object({
     totalReturnPct: zod.number(),
@@ -468,6 +495,10 @@ export const RunOptimizationBody = zod.object({
     .min(runOptimizationBodyWalkForwardSplitMin)
     .max(runOptimizationBodyWalkForwardSplitMax)
     .default(runOptimizationBodyWalkForwardSplitDefault),
+  walkForwardSplitDate: zod
+    .string()
+    .optional()
+    .describe("ISO date split — overrides walkForwardSplit"),
   maxDrawdownFilterPct: zod
     .number()
     .default(runOptimizationBodyMaxDrawdownFilterPctDefault)
@@ -697,6 +728,208 @@ export const RunOptimizationResponse = zod.object({
 });
 
 /**
+ * @summary Run every available strategy on the same data and rank them
+ */
+export const runTournamentBodyLookbackDaysMin = 7;
+export const runTournamentBodyLookbackDaysMax = 1825;
+
+export const runTournamentBodyInitialCapitalDefault = 1000;
+export const runTournamentBodyInitialCapitalMin = 100;
+
+export const runTournamentBodyRiskLeverageMax = 50;
+
+export const runTournamentBodyRiskAtrPeriodMin = 5;
+export const runTournamentBodyRiskAtrPeriodMax = 50;
+
+export const runTournamentBodyRiskAtrMultiplierSLMin = 0.25;
+export const runTournamentBodyRiskAtrMultiplierSLMax = 5;
+
+export const runTournamentBodyRiskRiskRewardRatioMin = 0.5;
+export const runTournamentBodyRiskRiskRewardRatioMax = 10;
+
+export const runTournamentBodyRiskMakerFeePctMin = 0;
+export const runTournamentBodyRiskMakerFeePctMax = 1;
+
+export const runTournamentBodyRiskTakerFeePctMin = 0;
+export const runTournamentBodyRiskTakerFeePctMax = 1;
+
+export const runTournamentBodyRiskSlippagePctMin = 0;
+export const runTournamentBodyRiskSlippagePctMax = 1;
+
+export const runTournamentBodyWalkForwardSplitDefault = 0.7;
+export const runTournamentBodyWalkForwardSplitMin = 0.3;
+export const runTournamentBodyWalkForwardSplitMax = 0.9;
+
+export const runTournamentBodyMaxDrawdownFilterPctDefault = 40;
+
+export const RunTournamentBody = zod.object({
+  strategyIds: zod
+    .array(zod.string())
+    .optional()
+    .describe(
+      "Optional explicit list. If omitted, runs every available strategy with its default params.",
+    ),
+  interval: zod
+    .enum(["5m", "15m", "30m", "1h", "2h", "4h", "1d"])
+    .describe("Candle timeframe"),
+  lookbackDays: zod
+    .number()
+    .min(runTournamentBodyLookbackDaysMin)
+    .max(runTournamentBodyLookbackDaysMax),
+  initialCapital: zod
+    .number()
+    .min(runTournamentBodyInitialCapitalMin)
+    .default(runTournamentBodyInitialCapitalDefault),
+  risk: zod.object({
+    leverage: zod
+      .number()
+      .min(1)
+      .max(runTournamentBodyRiskLeverageMax)
+      .describe("Linear leverage (10-20 recommended)"),
+    atrPeriod: zod
+      .number()
+      .min(runTournamentBodyRiskAtrPeriodMin)
+      .max(runTournamentBodyRiskAtrPeriodMax)
+      .describe("Period for ATR calculation (default 14)"),
+    atrMultiplierSL: zod
+      .number()
+      .min(runTournamentBodyRiskAtrMultiplierSLMin)
+      .max(runTournamentBodyRiskAtrMultiplierSLMax)
+      .describe("SL distance = ATR × this multiplier"),
+    riskRewardRatio: zod
+      .number()
+      .min(runTournamentBodyRiskRiskRewardRatioMin)
+      .max(runTournamentBodyRiskRiskRewardRatioMax)
+      .describe("TP distance = SL distance × this ratio"),
+    makerFeePct: zod
+      .number()
+      .min(runTournamentBodyRiskMakerFeePctMin)
+      .max(runTournamentBodyRiskMakerFeePctMax)
+      .describe("Maker fee % (e.g. 0.01 = 0.01% for limit fills like TP)"),
+    takerFeePct: zod
+      .number()
+      .min(runTournamentBodyRiskTakerFeePctMin)
+      .max(runTournamentBodyRiskTakerFeePctMax)
+      .describe("Taker fee % (e.g. 0.035 = 0.035% for market entries and SL)"),
+    slippagePct: zod
+      .number()
+      .min(runTournamentBodyRiskSlippagePctMin)
+      .max(runTournamentBodyRiskSlippagePctMax)
+      .describe("Slippage % applied to market orders (entries and SL exits)"),
+  }),
+  walkForwardSplit: zod
+    .number()
+    .min(runTournamentBodyWalkForwardSplitMin)
+    .max(runTournamentBodyWalkForwardSplitMax)
+    .default(runTournamentBodyWalkForwardSplitDefault),
+  walkForwardSplitDate: zod
+    .string()
+    .optional()
+    .describe(
+      "ISO date split (e.g. 2025-01-01 to train on 2024 \/ test on 2025+)",
+    ),
+  maxDrawdownFilterPct: zod
+    .number()
+    .default(runTournamentBodyMaxDrawdownFilterPctDefault),
+});
+
+export const RunTournamentResponse = zod.object({
+  rows: zod.array(
+    zod.object({
+      strategyId: zod.string(),
+      strategyName: zod.string(),
+      category: zod.string(),
+      inSample: zod.object({
+        totalReturnPct: zod.number(),
+        annualReturnPct: zod.number(),
+        maxDrawdownPct: zod.number(),
+        sharpe: zod.number(),
+        sortino: zod.number(),
+        winRate: zod.number(),
+        profitFactor: zod.number(),
+        trades: zod.number(),
+        wins: zod.number(),
+        losses: zod.number(),
+        avgWinPct: zod.number(),
+        avgLossPct: zod.number(),
+        finalEquity: zod.number(),
+        liquidations: zod.number(),
+        verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
+      }),
+      outOfSample: zod.object({
+        totalReturnPct: zod.number(),
+        annualReturnPct: zod.number(),
+        maxDrawdownPct: zod.number(),
+        sharpe: zod.number(),
+        sortino: zod.number(),
+        winRate: zod.number(),
+        profitFactor: zod.number(),
+        trades: zod.number(),
+        wins: zod.number(),
+        losses: zod.number(),
+        avgWinPct: zod.number(),
+        avgLossPct: zod.number(),
+        finalEquity: zod.number(),
+        liquidations: zod.number(),
+        verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
+      }),
+      robustnessScore: zod.number(),
+      filtered: zod.boolean(),
+      error: zod.string().optional(),
+    }),
+  ),
+  best: zod
+    .object({
+      strategyId: zod.string(),
+      strategyName: zod.string(),
+      category: zod.string(),
+      inSample: zod.object({
+        totalReturnPct: zod.number(),
+        annualReturnPct: zod.number(),
+        maxDrawdownPct: zod.number(),
+        sharpe: zod.number(),
+        sortino: zod.number(),
+        winRate: zod.number(),
+        profitFactor: zod.number(),
+        trades: zod.number(),
+        wins: zod.number(),
+        losses: zod.number(),
+        avgWinPct: zod.number(),
+        avgLossPct: zod.number(),
+        finalEquity: zod.number(),
+        liquidations: zod.number(),
+        verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
+      }),
+      outOfSample: zod.object({
+        totalReturnPct: zod.number(),
+        annualReturnPct: zod.number(),
+        maxDrawdownPct: zod.number(),
+        sharpe: zod.number(),
+        sortino: zod.number(),
+        winRate: zod.number(),
+        profitFactor: zod.number(),
+        trades: zod.number(),
+        wins: zod.number(),
+        losses: zod.number(),
+        avgWinPct: zod.number(),
+        avgLossPct: zod.number(),
+        finalEquity: zod.number(),
+        liquidations: zod.number(),
+        verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
+      }),
+      robustnessScore: zod.number(),
+      filtered: zod.boolean(),
+      error: zod.string().optional(),
+    })
+    .optional(),
+  totalStrategies: zod.number(),
+  kept: zod.number(),
+  dropped: zod.number(),
+  drawdownFilterPct: zod.number(),
+  splitDate: zod.string().optional(),
+});
+
+/**
  * @summary Compare multiple parameter sets head-to-head
  */
 export const compareStrategiesBodyRequestsItemLookbackDaysMin = 7;
@@ -791,7 +1024,15 @@ export const CompareStrategiesBody = zod.object({
         .min(compareStrategiesBodyRequestsItemWalkForwardSplitMin)
         .max(compareStrategiesBodyRequestsItemWalkForwardSplitMax)
         .default(compareStrategiesBodyRequestsItemWalkForwardSplitDefault)
-        .describe("Fraction used for in-sample (rest is out-of-sample)"),
+        .describe(
+          "Fraction used for in-sample (rest is out-of-sample). Ignored if walkForwardSplitDate is set.",
+        ),
+      walkForwardSplitDate: zod
+        .string()
+        .optional()
+        .describe(
+          "ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present.",
+        ),
     }),
   ),
   labels: zod.array(zod.string()),
@@ -905,7 +1146,15 @@ export const CompareStrategiesResponse = zod.object({
           .default(
             compareStrategiesResponseResultsItemRequestWalkForwardSplitDefault,
           )
-          .describe("Fraction used for in-sample (rest is out-of-sample)"),
+          .describe(
+            "Fraction used for in-sample (rest is out-of-sample). Ignored if walkForwardSplitDate is set.",
+          ),
+        walkForwardSplitDate: zod
+          .string()
+          .optional()
+          .describe(
+            "ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present.",
+          ),
       }),
       metrics: zod.object({
         totalReturnPct: zod.number(),

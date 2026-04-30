@@ -17,4 +17,8 @@ export interface StrategyMeta {
   category: StrategyMetaCategory;
   risk: StrategyMetaRisk;
   params: StrategyParam[];
+  /** false when the strategy requires data not available in this lab (e.g. order book, funding, second asset) */
+  available?: boolean;
+  /** Human-readable reason when available=false */
+  unavailableReason?: string;
 }

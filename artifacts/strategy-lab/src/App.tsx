@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LabPage } from "@/pages/LabPage";
 import { OptimizerPage } from "@/pages/OptimizerPage";
 import { ComparePage } from "@/pages/ComparePage";
+import { TournamentPage } from "@/pages/TournamentPage";
 import { DEFAULT_CONFIG, type LabConfig } from "@/components/LabControls";
 
 const queryClient = new QueryClient({
@@ -17,12 +18,13 @@ const queryClient = new QueryClient({
   },
 });
 
-type TabKey = "lab" | "optimizer" | "compare";
+type TabKey = "lab" | "tournament" | "optimizer" | "compare";
 
 function Shell() {
   const [tab, setTab] = useState<TabKey>("lab");
   const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
   const [paramValues, setParamValues] = useState<Record<string, number>>({});
+  const [selectedStrategyId, setSelectedStrategyId] = useState<string>("");
 
   return (
     <div className="min-h-screen w-full text-foreground">
@@ -55,8 +57,9 @@ function Shell() {
 
       <main className="mx-auto max-w-7xl px-3 sm:px-6 py-4 sm:py-6">
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="w-full">
-          <TabsList className="grid grid-cols-3 w-full sm:w-auto sm:inline-grid mb-4 font-mono uppercase text-[11px] tracking-wider">
+          <TabsList className="grid grid-cols-4 w-full sm:w-auto sm:inline-grid mb-4 font-mono uppercase text-[10px] sm:text-[11px] tracking-wider">
             <TabsTrigger value="lab">Lab</TabsTrigger>
+            <TabsTrigger value="tournament">Tournament</TabsTrigger>
             <TabsTrigger value="optimizer">Optimizer</TabsTrigger>
             <TabsTrigger value="compare">Compare</TabsTrigger>
           </TabsList>
@@ -66,6 +69,18 @@ function Shell() {
               onConfigChange={setConfig}
               paramValues={paramValues}
               onParamsChange={setParamValues}
+              selectedStrategyId={selectedStrategyId}
+              onSelectedStrategyIdChange={setSelectedStrategyId}
+            />
+          </TabsContent>
+          <TabsContent value="tournament" className="mt-0">
+            <TournamentPage
+              baseConfig={config}
+              onApply={(strategyId) => {
+                setSelectedStrategyId(strategyId);
+                setParamValues({});
+                setTab("lab");
+              }}
             />
           </TabsContent>
           <TabsContent value="optimizer" className="mt-0">

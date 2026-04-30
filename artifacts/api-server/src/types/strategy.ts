@@ -20,14 +20,24 @@ export type StrategyParam = {
   description?: string;
 };
 
+export type StrategyCategory =
+  | "smc"
+  | "trend"
+  | "mean_reversion"
+  | "breakout"
+  | "orderflow"
+  | "advanced";
+
 export type StrategyMeta = {
   id: string;
   name: string;
   tagline: string;
   description: string;
-  category: "trend" | "mean_reversion" | "breakout" | "momentum" | "moonshot";
+  category: StrategyCategory;
   risk: "low" | "medium" | "high" | "extreme";
   params: StrategyParam[];
+  available?: boolean; // false = stub (requires data we don't have e.g. order book / funding rate)
+  unavailableReason?: string;
 };
 
 export type Signal = -1 | 0 | 1;
@@ -61,7 +71,7 @@ export const MAX_CANDLES_PER_INTERVAL: Record<Interval, number> = {
   "5m": 26_000, // ~90 days
   "15m": 18_000, // ~187 days
   "30m": 18_000, // ~375 days
-  "1h": 9_000, // ~375 days
+  "1h": 18_000, // ~750 days (2 years for 2024+2025 backtests)
   "2h": 9_000, // ~750 days
   "4h": 5_000, // ~833 days
   "1d": 1_825, // 5 years

@@ -25,6 +25,7 @@ export type BacktestRequest = {
   initialCapital: number;
   risk: RiskConfig;
   walkForwardSplit?: number;
+  walkForwardSplitDate?: string;
 };
 
 export type Trade = {
@@ -421,11 +422,29 @@ function runEngine(
   return { trades, equityCurve, finalEquity: equity };
 }
 
-function splitIndex(candles: Candle[], split: number, atrPeriod: number): number {
+function splitIndex(
+  candles: Candle[],
+  split: number,
+  atrPeriod: number,
+  splitDate?: string,
+): number {
+  const minStart = atrPeriod * 2 + 5;
+  const maxIdx = candles.length - 5;
+  if (splitDate && candles.length > 0) {
+    const target = Date.parse(splitDate);
+    if (Number.isFinite(target)) {
+      // Find the first candle whose timestamp >= target. Everything before it
+      // is in-sample, everything from it onward is out-of-sample.
+      let idx = candles.findIndex((c) => Date.parse(c.t) >= target);
+      if (idx < 0) idx = candles.length - 1;
+      // Convert to in-sample-end index (last in-sample bar).
+      idx = Math.max(0, idx - 1);
+      return Math.min(Math.max(idx, minStart), maxIdx);
+    }
+  }
   const s = Math.min(0.9, Math.max(0.3, split));
   const idx = Math.floor(candles.length * s);
-  const minStart = atrPeriod * 2 + 5;
-  return Math.min(Math.max(idx, minStart), candles.length - 5);
+  return Math.min(Math.max(idx, minStart), maxIdx);
 }
 
 export function runBacktest(
@@ -440,7 +459,7 @@ export function runBacktest(
   const atrPeriod = Math.max(2, Math.round(req.risk.atrPeriod));
   const atrSeries = atr(h, l, c, atrPeriod);
 
-  const sIdx = splitIndex(candles, req.walkForwardSplit ?? 0.7, atrPeriod);
+  const sIdx = splitIndex(candles, req.walkForwardSplit ?? 0.7, atrPeriod, req.walkForwardSplitDate);
 
   const isOut = runEngine(
     candles,
@@ -526,7 +545,7 @@ export function runBacktestMetricsOnly(
   const c = closesArr(candles);
   const atrPeriod = Math.max(2, Math.round(req.risk.atrPeriod));
   const atrSeries = atr(h, l, c, atrPeriod);
-  const sIdx = splitIndex(candles, req.walkForwardSplit ?? 0.7, atrPeriod);
+  const sIdx = splitIndex(candles, req.walkForwardSplit ?? 0.7, atrPeriod, req.walkForwardSplitDate);
 
   const isOut = runEngine(
     candles,

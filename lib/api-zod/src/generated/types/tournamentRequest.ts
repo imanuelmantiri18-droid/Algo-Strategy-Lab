@@ -5,13 +5,12 @@
  * Algo trading strategy lab API (real BTC/USDT data, momentum trend crossover)
  * OpenAPI spec version: 0.2.0
  */
-import type { BacktestRequestParams } from "./backtestRequestParams";
 import type { Interval } from "./interval";
 import type { RiskConfig } from "./riskConfig";
 
-export interface BacktestRequest {
-  strategyId: string;
-  params: BacktestRequestParams;
+export interface TournamentRequest {
+  /** Optional explicit list. If omitted, runs every available strategy with its default params. */
+  strategyIds?: string[];
   interval: Interval;
   /**
    * @minimum 7
@@ -22,11 +21,11 @@ export interface BacktestRequest {
   initialCapital: number;
   risk: RiskConfig;
   /**
-   * Fraction used for in-sample (rest is out-of-sample). Ignored if walkForwardSplitDate is set.
    * @minimum 0.3
    * @maximum 0.9
    */
   walkForwardSplit?: number;
-  /** ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present. */
+  /** ISO date split (e.g. 2025-01-01 to train on 2024 / test on 2025+) */
   walkForwardSplitDate?: string;
+  maxDrawdownFilterPct?: number;
 }

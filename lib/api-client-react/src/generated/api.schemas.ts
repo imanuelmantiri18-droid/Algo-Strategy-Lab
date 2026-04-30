@@ -65,11 +65,12 @@ export type StrategyMetaCategory =
   (typeof StrategyMetaCategory)[keyof typeof StrategyMetaCategory];
 
 export const StrategyMetaCategory = {
+  smc: "smc",
   trend: "trend",
   mean_reversion: "mean_reversion",
   breakout: "breakout",
-  momentum: "momentum",
-  moonshot: "moonshot",
+  orderflow: "orderflow",
+  advanced: "advanced",
 } as const;
 
 export type StrategyMetaRisk =
@@ -90,6 +91,10 @@ export interface StrategyMeta {
   category: StrategyMetaCategory;
   risk: StrategyMetaRisk;
   params: StrategyParam[];
+  /** false when the strategy requires data not available in this lab (e.g. order book, funding, second asset) */
+  available?: boolean;
+  /** Human-readable reason when available=false */
+  unavailableReason?: string;
 }
 
 export interface RiskConfig {
@@ -152,11 +157,13 @@ export interface BacktestRequest {
   initialCapital: number;
   risk: RiskConfig;
   /**
-   * Fraction used for in-sample (rest is out-of-sample)
+   * Fraction used for in-sample (rest is out-of-sample). Ignored if walkForwardSplitDate is set.
    * @minimum 0.3
    * @maximum 0.9
    */
   walkForwardSplit?: number;
+  /** ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present. */
+  walkForwardSplitDate?: string;
 }
 
 export interface EquityPoint {
@@ -281,6 +288,8 @@ export interface OptimizeRequest {
    * @maximum 0.9
    */
   walkForwardSplit?: number;
+  /** ISO date split — overrides walkForwardSplit */
+  walkForwardSplitDate?: string;
   /** Drop combos whose IS max drawdown exceeds this % */
   maxDrawdownFilterPct?: number;
   /** @maximum 10000 */
@@ -315,6 +324,49 @@ export interface OptimizeResult {
   drawdownFilterPct: number;
   /** Number of rows returned in `rows` (kept-only leaderboard) */
   topN?: number;
+}
+
+export interface TournamentRequest {
+  /** Optional explicit list. If omitted, runs every available strategy with its default params. */
+  strategyIds?: string[];
+  interval: Interval;
+  /**
+   * @minimum 7
+   * @maximum 1825
+   */
+  lookbackDays: number;
+  /** @minimum 100 */
+  initialCapital: number;
+  risk: RiskConfig;
+  /**
+   * @minimum 0.3
+   * @maximum 0.9
+   */
+  walkForwardSplit?: number;
+  /** ISO date split (e.g. 2025-01-01 to train on 2024 / test on 2025+) */
+  walkForwardSplitDate?: string;
+  maxDrawdownFilterPct?: number;
+}
+
+export interface TournamentRow {
+  strategyId: string;
+  strategyName: string;
+  category: string;
+  inSample: BacktestMetrics;
+  outOfSample: BacktestMetrics;
+  robustnessScore: number;
+  filtered: boolean;
+  error?: string;
+}
+
+export interface TournamentResult {
+  rows: TournamentRow[];
+  best?: TournamentRow;
+  totalStrategies: number;
+  kept: number;
+  dropped: number;
+  drawdownFilterPct: number;
+  splitDate?: string;
 }
 
 export interface CompareRequest {

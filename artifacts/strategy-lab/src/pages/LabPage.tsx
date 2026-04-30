@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import {
   useListStrategies,
   useRunBacktest,
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { StrategyPicker } from "@/components/StrategyPicker";
 import { StrategyParams } from "@/components/StrategyParams";
 import {
   LabControls,
@@ -26,6 +27,8 @@ type Props = {
   onConfigChange: (next: LabConfig) => void;
   paramValues: Record<string, number>;
   onParamsChange: (next: Record<string, number>) => void;
+  selectedStrategyId: string;
+  onSelectedStrategyIdChange: (id: string) => void;
 };
 
 export function LabPage({
@@ -33,20 +36,31 @@ export function LabPage({
   onConfigChange,
   paramValues,
   onParamsChange,
+  selectedStrategyId,
+  onSelectedStrategyIdChange,
 }: Props) {
   const stratsQ = useListStrategies();
   const strategies: StrategyMeta[] = stratsQ.data?.strategies ?? [];
-  const strategy = strategies[0];
+  const availableStrategies = strategies.filter((s) => s.available !== false);
+  const strategy: StrategyMeta | undefined =
+    strategies.find((s) => s.id === selectedStrategyId) ?? availableStrategies[0];
   const runM = useRunBacktest();
 
+  // Auto-select first available strategy on load
+  useEffect(() => {
+    if (!selectedStrategyId && availableStrategies.length > 0) {
+      onSelectedStrategyIdChange(availableStrategies[0]!.id);
+    }
+  }, [selectedStrategyId, availableStrategies, onSelectedStrategyIdChange]);
+
+  // Reset params whenever the selected strategy changes
   useEffect(() => {
     if (!strategy) return;
-    if (Object.keys(paramValues).length === 0) {
-      const next: Record<string, number> = {};
-      for (const p of strategy.params) next[p.key] = p.default;
-      onParamsChange(next);
-    }
-  }, [strategy, paramValues, onParamsChange]);
+    const next: Record<string, number> = {};
+    for (const p of strategy.params) next[p.key] = p.default;
+    onParamsChange(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategy?.id]);
 
   const isLoading = runM.isPending;
   const result = runM.data;
@@ -60,7 +74,9 @@ export function LabPage({
         interval: config.interval,
         lookbackDays: config.lookbackDays,
         initialCapital: config.initialCapital,
-        walkForwardSplit: config.walkForwardSplit,
+        ...(config.useDateSplit
+          ? { walkForwardSplitDate: config.walkForwardSplitDate }
+          : { walkForwardSplit: config.walkForwardSplit }),
         risk: config.risk,
       },
     });
@@ -76,9 +92,35 @@ export function LabPage({
     [config],
   );
 
+  const splitLabel = config.useDateSplit
+    ? `train < ${config.walkForwardSplitDate} · test ≥ ${config.walkForwardSplitDate}`
+    : `${Math.round(config.walkForwardSplit * 100)}% in / ${Math.round((1 - config.walkForwardSplit) * 100)}% out`;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4">
       <div className="lg:col-span-4 space-y-3 order-2 lg:order-1">
+        <Card>
+          <CardHeader className="py-3 px-4">
+            <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+              <span>Strategies</span>
+              <Badge variant="outline" className="font-mono text-[9px]">
+                {availableStrategies.length} / {strategies.length}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-4 pt-0 max-h-[480px] overflow-y-auto">
+            {stratsQ.isLoading ? (
+              <div className="text-xs text-muted-foreground">Loading…</div>
+            ) : (
+              <StrategyPicker
+                strategies={strategies}
+                selectedId={strategy?.id ?? ""}
+                onSelect={onSelectedStrategyIdChange}
+              />
+            )}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">
@@ -86,9 +128,7 @@ export function LabPage({
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4 pt-0">
-            {stratsQ.isLoading ? (
-              <div className="text-xs text-muted-foreground">Loading…</div>
-            ) : strategy ? (
+            {strategy ? (
               <p className="text-xs text-muted-foreground leading-relaxed border-l-2 border-primary/40 pl-3">
                 {strategy.description}
               </p>
@@ -165,10 +205,10 @@ export function LabPage({
           steps={[
             `Fetching real BTC/USDT ${config.interval} klines from Binance…`,
             `Aligning ${config.lookbackDays} days of price history…`,
-            "Computing EMA, RSI, and ATR indicators…",
+            "Computing indicators…",
             "Generating long/short signals…",
-            `Walking trades through in-sample period (${Math.round(config.walkForwardSplit * 100)}%)…`,
-            `Forward-testing on out-of-sample period (${Math.round((1 - config.walkForwardSplit) * 100)}%)…`,
+            `Walking trades through in-sample period (${splitLabel})…`,
+            `Forward-testing on out-of-sample period…`,
             "Applying ATR stop loss, R:R take profit, fees, slippage…",
             "Computing Sharpe, Sortino, drawdown, robustness…",
           ]}
@@ -189,10 +229,13 @@ export function LabPage({
                 Awaiting Run
               </div>
               <div className="mt-2 text-base sm:text-lg">
-                Pick a timeframe, dial in your risk, and run on real BTC history.
+                Pick a strategy from the {availableStrategies.length}-algo library and run on real BTC history.
               </div>
               <div className="mt-2 text-xs text-muted-foreground">
-                Default: $1,000 · 10× · 1h · 365d · ATR×1.5 stops with 1:2 R:R.
+                Default: $1,000 · 5× · 4h · {config.lookbackDays}d · {splitLabel}.
+              </div>
+              <div className="mt-3 text-[10px] text-muted-foreground/70 font-mono">
+                Try the <span className="text-primary">Tournament</span> tab to find the best algorithm across all strategies.
               </div>
             </CardContent>
           </Card>

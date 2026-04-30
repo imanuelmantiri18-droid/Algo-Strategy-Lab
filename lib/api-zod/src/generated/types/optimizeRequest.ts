@@ -28,6 +28,8 @@ export interface OptimizeRequest {
    * @maximum 0.9
    */
   walkForwardSplit?: number;
+  /** ISO date split — overrides walkForwardSplit */
+  walkForwardSplitDate?: string;
   /** Drop combos whose IS max drawdown exceeds this % */
   maxDrawdownFilterPct?: number;
   /** @maximum 10000 */

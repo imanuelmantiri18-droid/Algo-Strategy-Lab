@@ -10,9 +10,10 @@ export type StrategyMetaCategory =
   (typeof StrategyMetaCategory)[keyof typeof StrategyMetaCategory];
 
 export const StrategyMetaCategory = {
+  smc: "smc",
   trend: "trend",
   mean_reversion: "mean_reversion",
   breakout: "breakout",
-  momentum: "momentum",
-  moonshot: "moonshot",
+  orderflow: "orderflow",
+  advanced: "advanced",
 } as const;

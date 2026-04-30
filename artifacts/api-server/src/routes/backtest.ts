@@ -3,8 +3,9 @@ import {
   RunBacktestBody,
   RunOptimizationBody,
   CompareStrategiesBody,
+  RunTournamentBody,
 } from "@workspace/api-zod";
-import { getStrategy } from "../lib/strategies";
+import { getStrategy, availableStrategies, STRATEGIES } from "../lib/strategies";
 import { getBtcHistory } from "../lib/marketData";
 import {
   runBacktest,
@@ -411,5 +412,162 @@ router.post("/backtest/compare", async (req, res, next) => {
     next(err);
   }
 });
+
+// ---------------- Tournament: every strategy on the same data ----------------
+
+type TournamentRow = {
+  strategyId: string;
+  strategyName: string;
+  category: string;
+  inSample: ReturnType<typeof runBacktestMetricsOnly>["inSample"];
+  outOfSample: ReturnType<typeof runBacktestMetricsOnly>["outOfSample"];
+  robustnessScore: number;
+  filtered: boolean;
+  error?: string;
+};
+
+function defaultParamsFor(stratId: string): Record<string, number> {
+  const s = getStrategy(stratId);
+  if (!s) return {};
+  const out: Record<string, number> = {};
+  for (const p of s.params) out[p.key] = p.default;
+  return out;
+}
+
+router.post("/backtest/tournament", async (req, res, next) => {
+  const parsed = RunTournamentBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid body", issues: parsed.error.issues });
+    return;
+  }
+  const body = parsed.data;
+  try {
+    const candles = await getBtcHistory(
+      body.interval as Interval,
+      body.lookbackDays,
+    );
+    if (candles.length < 100) {
+      res.status(400).json({
+        error: `Not enough candles fetched (${candles.length}).`,
+      });
+      return;
+    }
+
+    const ddFilter = body.maxDrawdownFilterPct ?? 40;
+    const ids = body.strategyIds && body.strategyIds.length > 0
+      ? body.strategyIds.filter((id) => !!getStrategy(id))
+      : availableStrategies().map((s) => s.id);
+
+    const rows: TournamentRow[] = [];
+    let kept = 0;
+    let dropped = 0;
+    for (const id of ids) {
+      const s = getStrategy(id)!;
+      if (s.available === false) {
+        rows.push({
+          strategyId: s.id,
+          strategyName: s.name,
+          category: s.category,
+          inSample: emptyTournamentMetrics(),
+          outOfSample: emptyTournamentMetrics(),
+          robustnessScore: 0,
+          filtered: true,
+          error: s.unavailableReason ?? "unavailable",
+        });
+        dropped++;
+        continue;
+      }
+      try {
+        const r = {
+          strategyId: id,
+          params: defaultParamsFor(id),
+          interval: body.interval as Interval,
+          lookbackDays: body.lookbackDays,
+          initialCapital: body.initialCapital,
+          risk: body.risk as RiskConfig,
+          walkForwardSplit: body.walkForwardSplit,
+          walkForwardSplitDate: body.walkForwardSplitDate,
+        };
+        const m = runBacktestMetricsOnly(s, candles, r);
+        const filtered = Math.abs(m.inSample.maxDrawdownPct) > ddFilter;
+        if (filtered) dropped++;
+        else kept++;
+        rows.push({
+          strategyId: s.id,
+          strategyName: s.name,
+          category: s.category,
+          inSample: m.inSample,
+          outOfSample: m.outOfSample,
+          robustnessScore: m.robustnessScore,
+          filtered,
+        });
+      } catch (e) {
+        dropped++;
+        rows.push({
+          strategyId: s.id,
+          strategyName: s.name,
+          category: s.category,
+          inSample: emptyTournamentMetrics(),
+          outOfSample: emptyTournamentMetrics(),
+          robustnessScore: 0,
+          filtered: true,
+          error: (e as Error).message,
+        });
+      }
+    }
+
+    rows.sort((a, b) => {
+      if (a.filtered !== b.filtered) return a.filtered ? 1 : -1;
+      return b.outOfSample.annualReturnPct - a.outOfSample.annualReturnPct;
+    });
+
+    const best = rows.find((r) => !r.filtered);
+
+    // Determine actual split date used
+    let splitDateUsed = body.walkForwardSplitDate ?? "";
+    if (!splitDateUsed) {
+      const split = body.walkForwardSplit ?? 0.7;
+      const idx = Math.floor(candles.length * split);
+      splitDateUsed = candles[Math.min(idx, candles.length - 1)]?.t ?? "";
+    }
+
+    res.json({
+      rows,
+      best,
+      totalStrategies: ids.length,
+      kept,
+      dropped,
+      drawdownFilterPct: ddFilter,
+      splitDate: splitDateUsed,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Reuse: void STRATEGIES so tree-shake doesn't drop the registry import
+void STRATEGIES;
+
+function emptyTournamentMetrics(): ReturnType<
+  typeof runBacktestMetricsOnly
+>["inSample"] {
+  return {
+    totalReturnPct: 0,
+    annualReturnPct: 0,
+    maxDrawdownPct: 0,
+    sharpe: 0,
+    sortino: 0,
+    winRate: 0,
+    profitFactor: 0,
+    trades: 0,
+    wins: 0,
+    losses: 0,
+    avgWinPct: 0,
+    avgLossPct: 0,
+    finalEquity: 0,
+    liquidations: 0,
+    verdict: "poor" as const,
+  };
+}
 
 export default router;

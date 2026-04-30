@@ -108,6 +108,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OptimizeResult"
+  /backtest/tournament:
+    post:
+      operationId: runTournament
+      tags: [backtest]
+      summary: Run every available strategy on the same data and rank them
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TournamentRequest"
+      responses:
+        "200":
+          description: Tournament leaderboard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TournamentResult"
   /backtest/compare:
     post:
       operationId: compareStrategies
@@ -191,7 +209,7 @@ components:
         description: { type: string }
         category:
           type: string
-          enum: [trend, mean_reversion, breakout, momentum, moonshot]
+          enum: [smc, trend, mean_reversion, breakout, orderflow, advanced]
         risk:
           type: string
           enum: [low, medium, high, extreme]
@@ -199,6 +217,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StrategyParam"
+        available:
+          type: boolean
+          description: false when the strategy requires data not available in this lab (e.g. order book, funding, second asset)
+        unavailableReason:
+          type: string
+          description: Human-readable reason when available=false
 
     RiskConfig:
       type: object
@@ -279,7 +303,10 @@ components:
           minimum: 0.3
           maximum: 0.9
           default: 0.7
-          description: Fraction used for in-sample (rest is out-of-sample)
+          description: Fraction used for in-sample (rest is out-of-sample). Ignored if walkForwardSplitDate is set.
+        walkForwardSplitDate:
+          type: string
+          description: ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present.
 
     EquityPoint:
       type: object
@@ -452,6 +479,9 @@ components:
           minimum: 0.3
           maximum: 0.9
           default: 0.7
+        walkForwardSplitDate:
+          type: string
+          description: ISO date split — overrides walkForwardSplit
         maxDrawdownFilterPct:
           type: number
           default: 40
@@ -518,6 +548,76 @@ components:
         topN:
           type: integer
           description: Number of rows returned in `rows` (kept-only leaderboard)
+
+    TournamentRequest:
+      type: object
+      required: [interval, lookbackDays, initialCapital, risk]
+      properties:
+        strategyIds:
+          type: array
+          items: { type: string }
+          description: Optional explicit list. If omitted, runs every available strategy with its default params.
+        interval:
+          $ref: "#/components/schemas/Interval"
+        lookbackDays:
+          type: integer
+          minimum: 7
+          maximum: 1825
+        initialCapital:
+          type: number
+          minimum: 100
+          default: 1000
+        risk:
+          $ref: "#/components/schemas/RiskConfig"
+        walkForwardSplit:
+          type: number
+          minimum: 0.3
+          maximum: 0.9
+          default: 0.7
+        walkForwardSplitDate:
+          type: string
+          description: ISO date split (e.g. 2025-01-01 to train on 2024 / test on 2025+)
+        maxDrawdownFilterPct:
+          type: number
+          default: 40
+
+    TournamentRow:
+      type: object
+      required:
+        - strategyId
+        - strategyName
+        - category
+        - inSample
+        - outOfSample
+        - robustnessScore
+        - filtered
+      properties:
+        strategyId: { type: string }
+        strategyName: { type: string }
+        category: { type: string }
+        inSample:
+          $ref: "#/components/schemas/BacktestMetrics"
+        outOfSample:
+          $ref: "#/components/schemas/BacktestMetrics"
+        robustnessScore: { type: number }
+        filtered: { type: boolean }
+        error: { type: string }
+
+    TournamentResult:
+      type: object
+      required: [rows, totalStrategies, kept, dropped, drawdownFilterPct]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/TournamentRow"
+        best:
+          $ref: "#/components/schemas/TournamentRow"
+        totalStrategies: { type: integer }
+        kept: { type: integer }
+        dropped: { type: integer }
+        drawdownFilterPct: { type: number }
+        splitDate: { type: string }
 
     CompareRequest:
       type: object

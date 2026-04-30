@@ -27,6 +27,8 @@ import type {
   MarketSeries,
   OptimizeRequest,
   OptimizeResult,
+  TournamentRequest,
+  TournamentResult,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -452,6 +454,92 @@ export const useRunOptimization = <
   TContext
 > => {
   return useMutation(getRunOptimizationMutationOptions(options));
+};
+
+/**
+ * @summary Run every available strategy on the same data and rank them
+ */
+export const getRunTournamentUrl = () => {
+  return `/api/backtest/tournament`;
+};
+
+export const runTournament = async (
+  tournamentRequest: TournamentRequest,
+  options?: RequestInit,
+): Promise<TournamentResult> => {
+  return customFetch<TournamentResult>(getRunTournamentUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(tournamentRequest),
+  });
+};
+
+export const getRunTournamentMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runTournament>>,
+    TError,
+    { data: BodyType<TournamentRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runTournament>>,
+  TError,
+  { data: BodyType<TournamentRequest> },
+  TContext
+> => {
+  const mutationKey = ["runTournament"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runTournament>>,
+    { data: BodyType<TournamentRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return runTournament(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunTournamentMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runTournament>>
+>;
+export type RunTournamentMutationBody = BodyType<TournamentRequest>;
+export type RunTournamentMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run every available strategy on the same data and rank them
+ */
+export const useRunTournament = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runTournament>>,
+    TError,
+    { data: BodyType<TournamentRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runTournament>>,
+  TError,
+  { data: BodyType<TournamentRequest> },
+  TContext
+> => {
+  return useMutation(getRunTournamentMutationOptions(options));
 };
 
 /**
