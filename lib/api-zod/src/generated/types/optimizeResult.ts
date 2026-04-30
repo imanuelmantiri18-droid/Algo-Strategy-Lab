@@ -15,4 +15,6 @@ export interface OptimizeResult {
   kept: number;
   dropped: number;
   drawdownFilterPct: number;
+  /** Number of rows returned in `rows` (kept-only leaderboard) */
+  topN?: number;
 }

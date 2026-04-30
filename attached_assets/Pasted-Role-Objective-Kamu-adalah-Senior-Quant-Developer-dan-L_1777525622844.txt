@@ -1,0 +1,24 @@
+Role & Objective:
+Kamu adalah Senior Quant Developer dan Lead Full-Stack Architect. Tugasmu adalah mengaudit dan membangun ulang "Strategy Lab / Backtest Engine" ini. Gunakan folder api-server (backend) dan strategy-lab (frontend) yang sudah di-import dari GitHub sebagai fondasi. JANGAN membangun dari nol.
+​1. Real Market Data (CRITICAL):
+​Tarik data historis BTC/USDT asli dari Binance API (Gunakan data-api.binance.vision untuk menghindari geo-block).
+​Sediakan dropdown timeframe: 5m, 15m, 30m, 1h, 2h, 4h, 1d. Tarik data minimal 1-2 tahun ke belakang.
+​2. Ultra-Optimization Mode (10,000+ Combinations):
+Tambahkan fitur Parameter Optimizer (Grid Search) dengan arsitektur berikut:
+​Backend (POST /api/optimize): Buat sistem looping untuk menguji ~10.000 kombinasi (EMA Fast/Slow, RSI, ATR Multiplier, dan RR Ratio).
+​Smart Batching: WAJIB proses dalam blok kecil (misal 100 kombinasi) menggunakan setImmediate agar server tidak hang/timeout.
+​Top 100 Leaderboard: Filter dan kirim hanya 100 hasil terbaik dengan Max Drawdown < 40%.
+​3. Realistic Execution Parameters:
+​Initial Capital: $1,000 | Leverage: 10x - 20x.
+​Biaya: Maker Fee (0.01%), Taker Fee (0.035%), dan Slippage (0.05%) pada setiap eksekusi.
+​Stop Loss wajib berbasis ATR. Take Profit wajib menggunakan Risk:Reward Ratio.
+​4. Frontend UI/UX (Mobile-Vertical First):
+​Buat sistem Tab: "Single Test" dan "Optimizer".
+​Di Tab Optimizer, tampilkan Real-time Progress Bar (Contoh: "Testing 4500/10000 combos...") dan hitungan estimasi waktu selesai.
+​Tampilkan hasil dalam Leaderboard Table yang responsif untuk layar smartphone (bisa di-scroll).
+​Tampilkan Equity Curve Chart menggunakan Recharts.
+​5. Strategy Logic:
+​Momentum Trend Crossover (EMA Cross + RSI Filter).
+​Implementasikan Walk-Forward Analysis (Pisahkan In-Sample dan Out-of-Sample) untuk menghindari overfitting.
+​Action:
+Mulai refactor backend untuk mendukung endpoint /api/optimize dan update frontend agar memiliki Tab Optimizer yang mampu menangani beban 10.000 iterasi.

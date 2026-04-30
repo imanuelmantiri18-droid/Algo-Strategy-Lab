@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   useListStrategies,
-  useRunOptimization,
+  useRunBacktest,
   type StrategyMeta,
 } from "@workspace/api-client-react";
 import {
@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -29,11 +30,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { LoadingPanel } from "@/components/LoadingPanel";
 import { MetricCard } from "@/components/MetricCard";
+import { EquityChart } from "@/components/EquityChart";
 import { DEFAULT_RISK } from "@/components/LabControls";
 import {
-  formatDollar,
   formatNumber,
   formatPercent,
   getVerdictColor,
@@ -41,6 +41,7 @@ import {
   type IntervalValue,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useOptimizeStream } from "@/hooks/useOptimizeStream";
 
 function parseGrid(input: string): number[] {
   return input
@@ -100,8 +101,9 @@ export function OptimizerPage({
     setCapital(initialCap);
   }, [initialInterval, initialDays, initialCap]);
 
-  const optM = useRunOptimization();
+  const optM = useOptimizeStream();
   const result = optM.data;
+  const equityM = useRunBacktest();
 
   const comboCount = useMemo(() => {
     let total = 1;
@@ -109,7 +111,7 @@ export function OptimizerPage({
       const arr = parseGrid(axes[k] ?? "");
       total *= arr.length || 1;
     }
-    return total;
+    return Math.min(total, 10000);
   }, [axes]);
 
   const onRun = () => {
@@ -120,21 +122,40 @@ export function OptimizerPage({
       .map(([key, value]) => ({ key, values: parseGrid(value) }))
       .filter((a) => a.values.length > 0);
 
-    optM.mutate({
+    equityM.reset();
+    optM.start({
+      strategyId: strategy.id,
+      baseParams,
+      baseRisk: DEFAULT_RISK,
+      axes: axesPayload,
+      interval,
+      lookbackDays,
+      initialCapital: capital,
+      walkForwardSplit: walkSplit,
+      maxDrawdownFilterPct: maxDDFilter,
+      maxCombos: 10000,
+      topN: 100,
+    });
+  };
+
+  // When optimization finishes, run a full backtest on the best combo so we
+  // can render its equity / drawdown curve.
+  useEffect(() => {
+    if (!result || !strategy) return;
+    equityM.mutate({
       data: {
         strategyId: strategy.id,
-        baseParams,
-        baseRisk: DEFAULT_RISK,
-        axes: axesPayload,
+        params: result.best.params,
         interval,
         lookbackDays,
         initialCapital: capital,
+        risk: result.best.risk,
         walkForwardSplit: walkSplit,
-        maxDrawdownFilterPct: maxDDFilter,
-        maxCombos: 10000,
       },
     });
-  };
+    // We intentionally only re-run when a new optimization result lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
 
   const scatterData = useMemo(() => {
     if (!result) return [];
@@ -265,21 +286,16 @@ export function OptimizerPage({
       </div>
 
       <div className="lg:col-span-8 space-y-3 order-1 lg:order-2 min-w-0">
-        <LoadingPanel
-          active={optM.isPending}
-          title="Sweeping the parameter grid"
-          subtitle={`${comboCount} combos · ${interval} · ${lookbackDays}d`}
-          steps={[
-            `Fetching real BTC/USDT ${interval} klines from Binance…`,
-            `Caching ${lookbackDays} days of price history…`,
-            `Pre-computing EMA, RSI, ATR for ${comboCount} combos…`,
-            "Building cartesian product of parameter axes…",
-            "Running in-sample backtests for every combo…",
-            "Running out-of-sample forward tests…",
-            `Filtering combos with > ${maxDDFilter}% drawdown…`,
-            "Ranking by OOS APY × robustness score…",
-          ]}
-        />
+        {optM.isPending || optM.progress ? (
+          <ProgressPanel
+            status={optM.status}
+            progress={optM.progress}
+            isPending={optM.isPending}
+            onCancel={optM.cancel}
+            interval={interval}
+            lookbackDays={lookbackDays}
+          />
+        ) : null}
 
         {optM.isError ? (
           <Card className="border-destructive/50">
@@ -477,7 +493,55 @@ export function OptimizerPage({
             <Card>
               <CardHeader className="py-3 px-4">
                 <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">
-                  All Combinations ({result.rows.length})
+                  Best Combo · Equity Curve
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-2 sm:px-4 pb-4 pt-0 space-y-2">
+                {equityM.isPending ? (
+                  <div className="h-[260px] flex items-center justify-center text-xs font-mono text-muted-foreground">
+                    Replaying best combo on full series…
+                  </div>
+                ) : equityM.data ? (
+                  <>
+                    <EquityChart
+                      series={[
+                        {
+                          name: "best",
+                          color: "hsl(152 90% 48%)",
+                          data: equityM.data.equityCurve,
+                        },
+                      ]}
+                      height={260}
+                      variant="equity"
+                    />
+                    <div className="text-[10px] font-mono text-muted-foreground flex items-center justify-between border-t border-border/40 pt-2">
+                      <span>
+                        {equityM.data.trades.length} trades · split{" "}
+                        {new Date(equityM.data.walkForward.splitDate).toISOString().slice(0, 10)}
+                      </span>
+                      <span>
+                        Final equity{" "}
+                        <span className="text-foreground">
+                          ${equityM.data.metrics.finalEquity.toFixed(0)}
+                        </span>
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="h-[260px] flex items-center justify-center text-xs font-mono text-muted-foreground">
+                    Waiting for replay…
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="py-3 px-4">
+                <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">
+                  Top {result.rows.length} Leaderboard{" "}
+                  <span className="text-[10px] text-muted-foreground/70">
+                    · DD &lt; {result.drawdownFilterPct}%
+                  </span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-2 sm:px-4 pb-4 pt-0">
@@ -579,6 +643,106 @@ export function OptimizerPage({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "—";
+  const totalSec = Math.round(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+function ProgressPanel({
+  status,
+  progress,
+  isPending,
+  onCancel,
+  interval,
+  lookbackDays,
+}: {
+  status: string | null;
+  progress: {
+    done: number;
+    total: number;
+    kept: number;
+    dropped: number;
+    elapsedMs: number;
+    etaMs: number;
+    rate: number;
+  } | null;
+  isPending: boolean;
+  onCancel: () => void;
+  interval: string;
+  lookbackDays: number;
+}) {
+  const pct = progress && progress.total > 0
+    ? Math.min(100, Math.round((progress.done / progress.total) * 100))
+    : 0;
+  return (
+    <Card>
+      <CardHeader className="py-3 px-4 flex-row items-center justify-between space-y-0 gap-2">
+        <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">
+          {isPending ? "Sweeping…" : "Sweep Complete"}
+        </CardTitle>
+        {isPending ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onCancel}
+            className="font-mono text-[10px] uppercase tracking-wider h-7"
+          >
+            Cancel
+          </Button>
+        ) : null}
+      </CardHeader>
+      <CardContent className="px-4 pb-4 pt-0 space-y-3">
+        <div className="text-xs font-mono text-muted-foreground">
+          {status ?? "Starting…"}
+        </div>
+        <Progress value={pct} className="h-2" />
+        <div className="flex flex-wrap items-baseline justify-between gap-2 text-[11px] font-mono">
+          <span className="text-foreground">
+            Testing{" "}
+            <span className="text-primary">{progress?.done.toLocaleString() ?? 0}</span>
+            {" / "}
+            {progress?.total.toLocaleString() ?? "—"} combos
+          </span>
+          <span className="text-muted-foreground">{pct}%</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+          <div className="rounded-md border border-border/40 bg-card/60 px-2 py-1.5">
+            <div className="text-muted-foreground uppercase tracking-wider">Elapsed</div>
+            <div className="text-foreground">{formatDuration(progress?.elapsedMs ?? 0)}</div>
+          </div>
+          <div className="rounded-md border border-border/40 bg-card/60 px-2 py-1.5">
+            <div className="text-muted-foreground uppercase tracking-wider">ETA</div>
+            <div className="text-foreground">
+              {isPending ? formatDuration(progress?.etaMs ?? 0) : "0s"}
+            </div>
+          </div>
+          <div className="rounded-md border border-border/40 bg-card/60 px-2 py-1.5">
+            <div className="text-muted-foreground uppercase tracking-wider">Rate</div>
+            <div className="text-foreground">
+              {progress ? `${progress.rate.toFixed(1)} /s` : "—"}
+            </div>
+          </div>
+          <div className="rounded-md border border-border/40 bg-card/60 px-2 py-1.5">
+            <div className="text-muted-foreground uppercase tracking-wider">Kept / Drop</div>
+            <div className="text-foreground">
+              <span className="text-emerald-300">{progress?.kept ?? 0}</span>
+              {" / "}
+              <span className="text-red-300">{progress?.dropped ?? 0}</span>
+            </div>
+          </div>
+        </div>
+        <div className="text-[10px] font-mono text-muted-foreground/70">
+          {interval} · {lookbackDays}d real BTC/USDT klines · streaming progress
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

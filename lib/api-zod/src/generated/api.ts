@@ -400,6 +400,9 @@ export const runOptimizationBodyMaxDrawdownFilterPctDefault = 40;
 export const runOptimizationBodyMaxCombosDefault = 10000;
 export const runOptimizationBodyMaxCombosMax = 10000;
 
+export const runOptimizationBodyTopNDefault = 100;
+export const runOptimizationBodyTopNMax = 500;
+
 export const RunOptimizationBody = zod.object({
   strategyId: zod.string(),
   baseParams: zod
@@ -473,6 +476,12 @@ export const RunOptimizationBody = zod.object({
     .number()
     .max(runOptimizationBodyMaxCombosMax)
     .default(runOptimizationBodyMaxCombosDefault),
+  topN: zod
+    .number()
+    .min(1)
+    .max(runOptimizationBodyTopNMax)
+    .default(runOptimizationBodyTopNDefault)
+    .describe("Cap response leaderboard to top N kept rows (default 100)"),
 });
 
 export const runOptimizationResponseRowsItemRiskLeverageMax = 50;
@@ -681,6 +690,10 @@ export const RunOptimizationResponse = zod.object({
   kept: zod.number(),
   dropped: zod.number(),
   drawdownFilterPct: zod.number(),
+  topN: zod
+    .number()
+    .optional()
+    .describe("Number of rows returned in `rows` (kept-only leaderboard)"),
 });
 
 /**

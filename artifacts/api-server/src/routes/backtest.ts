@@ -143,6 +143,7 @@ router.post("/backtest/optimize", async (req, res, next) => {
 
     const cap = Math.min(body.maxCombos ?? 10000, 10000);
     const ddFilter = body.maxDrawdownFilterPct ?? 40;
+    const topN = Math.max(1, Math.min(body.topN ?? 100, 500));
     const combos = buildCombos(
       body.baseParams,
       body.baseRisk as RiskConfig,
@@ -150,69 +151,234 @@ router.post("/backtest/optimize", async (req, res, next) => {
       cap,
     );
 
-    const rows: Array<{
-      params: Record<string, number>;
-      risk: RiskConfig;
-      inSample: ReturnType<typeof runBacktestMetricsOnly>["inSample"];
-      outOfSample: ReturnType<typeof runBacktestMetricsOnly>["outOfSample"];
-      robustnessScore: number;
-      filtered: boolean;
-    }> = [];
-    let kept = 0;
-    let dropped = 0;
+    const { rows, kept, dropped } = await runOptimizerLoop(
+      strat,
+      candles,
+      combos,
+      body,
+      ddFilter,
+      undefined,
+    );
 
-    // Run backtests in slices, yielding to the event loop so we don't block other requests.
-    const SLICE = 32;
-    for (let i = 0; i < combos.length; i += SLICE) {
-      const slice = combos.slice(i, i + SLICE);
-      for (const combo of slice) {
-        const r: BacktestRequest = {
-          strategyId: body.strategyId,
-          params: combo.params,
-          interval: body.interval as Interval,
-          lookbackDays: body.lookbackDays,
-          initialCapital: body.initialCapital,
-          risk: combo.risk,
-          walkForwardSplit: body.walkForwardSplit,
-        };
-        const m = runBacktestMetricsOnly(strat, candles, r);
-        const filtered = Math.abs(m.inSample.maxDrawdownPct) > ddFilter;
-        if (filtered) dropped++;
-        else kept++;
-        rows.push({
-          params: combo.params,
-          risk: combo.risk,
-          inSample: m.inSample,
-          outOfSample: m.outOfSample,
-          robustnessScore: m.robustnessScore,
-          filtered,
-        });
-      }
-      // Yield to event loop between slices.
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-
-    // Sort: kept rows first, then by OOS APY, robustness as tiebreaker.
-    rows.sort((a, b) => {
-      if (a.filtered !== b.filtered) return a.filtered ? 1 : -1;
-      const apyDiff = b.outOfSample.annualReturnPct - a.outOfSample.annualReturnPct;
-      if (Math.abs(apyDiff) > 0.01) return apyDiff;
-      return b.robustnessScore - a.robustnessScore;
-    });
-
-    const best = rows.find((r) => !r.filtered) ?? rows[0]!;
+    const sorted = sortOptimizerRows(rows);
+    const best = sorted.find((r) => !r.filtered) ?? sorted[0]!;
+    const leaderboard = sorted.filter((r) => !r.filtered).slice(0, topN);
 
     res.json({
       strategyId: body.strategyId,
-      rows,
+      rows: leaderboard,
       best,
       totalCombos: combos.length,
       kept,
       dropped,
       drawdownFilterPct: ddFilter,
+      topN,
     });
   } catch (err) {
     next(err);
+  }
+});
+
+// ---------------- Shared optimizer helpers ----------------
+
+type OptimizerRow = {
+  params: Record<string, number>;
+  risk: RiskConfig;
+  inSample: ReturnType<typeof runBacktestMetricsOnly>["inSample"];
+  outOfSample: ReturnType<typeof runBacktestMetricsOnly>["outOfSample"];
+  robustnessScore: number;
+  filtered: boolean;
+};
+
+function sortOptimizerRows(rows: OptimizerRow[]): OptimizerRow[] {
+  return [...rows].sort((a, b) => {
+    if (a.filtered !== b.filtered) return a.filtered ? 1 : -1;
+    const apyDiff = b.outOfSample.annualReturnPct - a.outOfSample.annualReturnPct;
+    if (Math.abs(apyDiff) > 0.01) return apyDiff;
+    return b.robustnessScore - a.robustnessScore;
+  });
+}
+
+async function runOptimizerLoop(
+  strat: ReturnType<typeof getStrategy>,
+  candles: Awaited<ReturnType<typeof getBtcHistory>>,
+  combos: Combo[],
+  body: {
+    strategyId: string;
+    interval: string;
+    lookbackDays: number;
+    initialCapital: number;
+    walkForwardSplit?: number;
+  },
+  ddFilter: number,
+  onProgress:
+    | ((done: number, total: number, kept: number, dropped: number) => void)
+    | undefined,
+): Promise<{ rows: OptimizerRow[]; kept: number; dropped: number }> {
+  const rows: OptimizerRow[] = [];
+  let kept = 0;
+  let dropped = 0;
+  // Process in small batches so we yield to the event loop and can stream
+  // progress without freezing the server.
+  const SLICE = 100;
+  for (let i = 0; i < combos.length; i += SLICE) {
+    const end = Math.min(i + SLICE, combos.length);
+    for (let j = i; j < end; j++) {
+      const combo = combos[j]!;
+      const r: BacktestRequest = {
+        strategyId: body.strategyId,
+        params: combo.params,
+        interval: body.interval as Interval,
+        lookbackDays: body.lookbackDays,
+        initialCapital: body.initialCapital,
+        risk: combo.risk,
+        walkForwardSplit: body.walkForwardSplit,
+      };
+      const m = runBacktestMetricsOnly(strat!, candles, r);
+      const filtered = Math.abs(m.inSample.maxDrawdownPct) > ddFilter;
+      if (filtered) dropped++;
+      else kept++;
+      rows.push({
+        params: combo.params,
+        risk: combo.risk,
+        inSample: m.inSample,
+        outOfSample: m.outOfSample,
+        robustnessScore: m.robustnessScore,
+        filtered,
+      });
+    }
+    if (onProgress) onProgress(end, combos.length, kept, dropped);
+    // Yield to event loop between slices so the server stays responsive.
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return { rows, kept, dropped };
+}
+
+// ---------------- SSE streaming optimizer ----------------
+
+router.post("/backtest/optimize/stream", async (req, res, next) => {
+  const parsed = RunOptimizationBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid body", issues: parsed.error.issues });
+    return;
+  }
+  const body = parsed.data;
+  const strat = getStrategy(body.strategyId);
+  if (!strat) {
+    res.status(400).json({ error: `Unknown strategy: ${body.strategyId}` });
+    return;
+  }
+
+  // SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  let cancelled = false;
+  // NOTE: in Express 5 / Node 18+, req.on("close") also fires when the
+  // request body is fully received, even on normal completion. Use the
+  // response stream instead — it only closes when the socket actually drops.
+  res.on("close", () => {
+    if (!res.writableEnded) cancelled = true;
+  });
+
+  try {
+    send("status", { phase: "fetching", message: "Fetching BTC/USDT klines from Binance…" });
+    const candles = await getBtcHistory(
+      body.interval as Interval,
+      body.lookbackDays,
+    );
+    if (candles.length < 100) {
+      send("error", {
+        message: `Not enough candles fetched (${candles.length}). Try a longer lookback or shorter interval.`,
+      });
+      res.end();
+      return;
+    }
+
+    const cap = Math.min(body.maxCombos ?? 10000, 10000);
+    const ddFilter = body.maxDrawdownFilterPct ?? 40;
+    const topN = Math.max(1, Math.min(body.topN ?? 100, 500));
+    const combos = buildCombos(
+      body.baseParams,
+      body.baseRisk as RiskConfig,
+      body.axes.map((a) => ({ key: a.key, values: [...a.values] })),
+      cap,
+    );
+
+    send("started", {
+      totalCombos: combos.length,
+      candleCount: candles.length,
+      drawdownFilterPct: ddFilter,
+      topN,
+    });
+
+    const startedAt = Date.now();
+    let lastEmit = 0;
+
+    const { rows, kept, dropped } = await runOptimizerLoop(
+      strat,
+      candles,
+      combos,
+      body,
+      ddFilter,
+      (done, total, k, d) => {
+        if (cancelled) return;
+        const now = Date.now();
+        // Throttle to ~5 progress events per second
+        if (now - lastEmit < 200 && done < total) return;
+        lastEmit = now;
+        const elapsedMs = now - startedAt;
+        const rate = done > 0 ? done / (elapsedMs / 1000) : 0;
+        const remaining = Math.max(0, total - done);
+        const etaMs = rate > 0 ? Math.round((remaining / rate) * 1000) : 0;
+        send("progress", {
+          done,
+          total,
+          kept: k,
+          dropped: d,
+          elapsedMs,
+          etaMs,
+          rate,
+        });
+      },
+    );
+
+    if (cancelled) {
+      res.end();
+      return;
+    }
+
+    const sorted = sortOptimizerRows(rows);
+    const best = sorted.find((r) => !r.filtered) ?? sorted[0]!;
+    const leaderboard = sorted.filter((r) => !r.filtered).slice(0, topN);
+
+    send("done", {
+      strategyId: body.strategyId,
+      rows: leaderboard,
+      best,
+      totalCombos: combos.length,
+      kept,
+      dropped,
+      drawdownFilterPct: ddFilter,
+      topN,
+      elapsedMs: Date.now() - startedAt,
+    });
+    res.end();
+  } catch (err) {
+    try {
+      send("error", { message: (err as Error)?.message ?? "Unknown error" });
+      res.end();
+    } catch {
+      next(err);
+    }
   }
 });
 

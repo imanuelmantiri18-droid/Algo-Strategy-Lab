@@ -285,6 +285,12 @@ export interface OptimizeRequest {
   maxDrawdownFilterPct?: number;
   /** @maximum 10000 */
   maxCombos?: number;
+  /**
+   * Cap response leaderboard to top N kept rows (default 100)
+   * @minimum 1
+   * @maximum 500
+   */
+  topN?: number;
 }
 
 export type OptimizeRowParams = { [key: string]: number };
@@ -307,6 +313,8 @@ export interface OptimizeResult {
   kept: number;
   dropped: number;
   drawdownFilterPct: number;
+  /** Number of rows returned in `rows` (kept-only leaderboard) */
+  topN?: number;
 }
 
 export interface CompareRequest {

@@ -32,4 +32,10 @@ export interface OptimizeRequest {
   maxDrawdownFilterPct?: number;
   /** @maximum 10000 */
   maxCombos?: number;
+  /**
+   * Cap response leaderboard to top N kept rows (default 100)
+   * @minimum 1
+   * @maximum 500
+   */
+  topN?: number;
 }

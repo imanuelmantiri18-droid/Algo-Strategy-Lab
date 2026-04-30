@@ -460,6 +460,12 @@ components:
           type: integer
           default: 10000
           maximum: 10000
+        topN:
+          type: integer
+          default: 100
+          minimum: 1
+          maximum: 500
+          description: Cap response leaderboard to top N kept rows (default 100)
 
     OptimizeRow:
       type: object
@@ -509,6 +515,9 @@ components:
         kept: { type: integer }
         dropped: { type: integer }
         drawdownFilterPct: { type: number }
+        topN:
+          type: integer
+          description: Number of rows returned in `rows` (kept-only leaderboard)
 
     CompareRequest:
       type: object
