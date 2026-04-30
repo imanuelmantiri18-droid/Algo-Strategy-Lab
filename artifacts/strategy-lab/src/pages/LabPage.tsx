@@ -16,6 +16,8 @@ import {
 import { LoadingPanel } from "@/components/LoadingPanel";
 import { MetricsGrid } from "@/components/MetricsGrid";
 import { EquityChart } from "@/components/EquityChart";
+import { TradesSummary } from "@/components/TradesSummary";
+import { TradesTable } from "@/components/TradesTable";
 
 type Props = {
   config: LabConfig;
@@ -41,7 +43,12 @@ export function LabPage({
 
   useEffect(() => {
     if (!selectedStrategyId && availableStrategies.length > 0) {
-      onSelectedStrategyIdChange(availableStrategies[0]!.id);
+      // Default to the tournament champion so the first-time user lands on
+      // the strategy we recommend.
+      const champion = availableStrategies.find(
+        (s) => s.id === "fractal_breakout",
+      );
+      onSelectedStrategyIdChange((champion ?? availableStrategies[0]!).id);
     }
   }, [selectedStrategyId, availableStrategies, onSelectedStrategyIdChange]);
 
@@ -228,6 +235,22 @@ export function LabPage({
                   ]}
                   height={180}
                 />
+              </CardContent>
+            </Card>
+
+            <TradesSummary trades={result.trades} />
+
+            <Card>
+              <CardHeader className="py-3 px-4">
+                <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+                  <span>Trade Log</span>
+                  <span className="text-[10px] text-muted-foreground/70">
+                    {result.trades.length} total
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-3 sm:px-4 pb-4 pt-0">
+                <TradesTable trades={result.trades} />
               </CardContent>
             </Card>
           </>
