@@ -87,6 +87,14 @@ function summarize(trades: Trade[]) {
     return Number.isFinite(a) && Number.isFinite(b) ? (b - a) / 3_600_000 : 0;
   });
 
+  // Liquidation-specific damage: count, total $ lost, and share of total losses.
+  const liqTrades = trades.filter((t) => t.exitReason === "liquidation");
+  const liqCount = liqTrades.length;
+  const liqLoss = liqTrades.reduce((s, t) => s + t.pnl, 0); // negative or 0
+  const totalLossDollars = losses.reduce((s, t) => s + t.pnl, 0); // negative
+  const liqShareOfLossPct =
+    totalLossDollars < 0 ? (liqLoss / totalLossDollars) * 100 : 0;
+
   return {
     total: trades.length,
     wins: wins.length,
@@ -113,6 +121,9 @@ function summarize(trades: Trade[]) {
     totalFees: trades.reduce((s, t) => s + (t.feePaid ?? 0), 0),
     totalFunding: trades.reduce((s, t) => s + (t.fundingPaid ?? 0), 0),
     netPnl: trades.reduce((s, t) => s + t.pnl, 0),
+    liqCount,
+    liqLoss,
+    liqShareOfLossPct,
     exitBuckets,
   };
 }
@@ -255,6 +266,26 @@ function SegmentColumn({
           label="Fees+Funding"
           value={formatDollarSigned(-(data.totalFees + data.totalFunding), 0)}
           color="text-muted-foreground"
+        />
+
+        <Mini
+          label="Liquidations"
+          value={String(data.liqCount)}
+          color={data.liqCount > 0 ? "text-red-500" : "text-muted-foreground"}
+        />
+        <Mini
+          label="Loss from LIQ"
+          value={data.liqCount > 0 ? formatDollarSigned(data.liqLoss, 0) : "—"}
+          color={data.liqCount > 0 ? "text-red-500" : "text-muted-foreground"}
+        />
+        <Mini
+          label="LIQ % of Loss"
+          value={
+            data.liqCount > 0
+              ? `${formatNumber(data.liqShareOfLossPct, 1)}%`
+              : "—"
+          }
+          color={data.liqCount > 0 ? "text-red-500" : "text-muted-foreground"}
         />
       </div>
 

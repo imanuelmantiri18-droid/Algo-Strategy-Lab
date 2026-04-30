@@ -62,15 +62,26 @@ function intervalToLabel(v: string): string {
   return `${v} candles`;
 }
 
+export function formatCapitalLabel(amount: number): string {
+  if (amount >= 1000) {
+    const k = amount / 1000;
+    const txt = Number.isInteger(k) ? `${k}k` : k.toFixed(1).replace(/\.0$/, "") + "k";
+    return `$${txt} starting capital`;
+  }
+  return `$${amount} starting capital`;
+}
+
 /**
  * Derive the human-readable summary labels for the *current* user-edited
- * config. Only the editable fields (interval, leverage, riskPerTradePct)
- * change relative to FIXED_CONFIG_SUMMARY — the others stay locked.
+ * config. Only the editable fields (interval, leverage, riskPerTradePct,
+ * initialCapital) change relative to FIXED_CONFIG_SUMMARY — the others
+ * stay locked.
  */
 export function deriveConfigSummary(c: LabConfig) {
   return {
     ...FIXED_CONFIG_SUMMARY,
     intervalLabel: intervalToLabel(c.interval),
     riskLabel: `${c.risk.leverage}× leverage · ${c.risk.riskPerTradePct}% risk/trade · R:R 1:${c.risk.riskRewardRatio}`,
+    capitalLabel: formatCapitalLabel(c.initialCapital),
   };
 }

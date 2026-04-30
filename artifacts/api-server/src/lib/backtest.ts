@@ -273,7 +273,7 @@ function runEngine(
   const maker = risk.makerFeePct / 100;
   const liqBuffer = 0.005;
   const liqMoveThreshold = 1 / lev - liqBuffer;
-  const riskPct = Math.min(100, Math.max(1, risk.riskPerTradePct ?? 100)) / 100;
+  const riskPct = Math.min(100, Math.max(0.5, risk.riskPerTradePct ?? 100)) / 100;
   const fundingRate = Math.max(0, risk.fundingRatePct8h ?? 0.01) / 100;
   const maxHoldBars = Math.max(0, Math.floor(risk.maxHoldingBars ?? 0));
   const intervalHours = INTERVAL_HOURS[interval];

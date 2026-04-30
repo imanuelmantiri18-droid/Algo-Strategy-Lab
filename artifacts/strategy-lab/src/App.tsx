@@ -25,10 +25,14 @@ function loadStoredConfig(): LabConfig {
     const parsed = JSON.parse(raw) as Partial<LabConfig> & {
       risk?: Partial<LabConfig["risk"]>;
     };
-    // Only allow the three editable fields to override defaults.
+    // Only allow the four editable fields to override defaults.
     return {
       ...DEFAULT_CONFIG,
       interval: parsed.interval ?? DEFAULT_CONFIG.interval,
+      initialCapital:
+        typeof parsed.initialCapital === "number" && parsed.initialCapital > 0
+          ? parsed.initialCapital
+          : DEFAULT_CONFIG.initialCapital,
       risk: {
         ...DEFAULT_CONFIG.risk,
         leverage: parsed.risk?.leverage ?? DEFAULT_CONFIG.risk.leverage,
@@ -65,6 +69,7 @@ function Shell() {
         CONFIG_KEY,
         JSON.stringify({
           interval: config.interval,
+          initialCapital: config.initialCapital,
           risk: {
             leverage: config.risk.leverage,
             riskPerTradePct: config.risk.riskPerTradePct,
@@ -79,6 +84,7 @@ function Shell() {
   const isDefaultConfig = useMemo(
     () =>
       config.interval === DEFAULT_CONFIG.interval &&
+      config.initialCapital === DEFAULT_CONFIG.initialCapital &&
       config.risk.leverage === DEFAULT_CONFIG.risk.leverage &&
       config.risk.riskPerTradePct === DEFAULT_CONFIG.risk.riskPerTradePct,
     [config],
