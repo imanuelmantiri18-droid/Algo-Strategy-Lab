@@ -72,7 +72,10 @@ type Props = {
   interval: IntervalValue;
   lookbackDays: number;
   initialCapital: number;
+  selectedStrategyId: string;
+  onSelectedStrategyIdChange: (id: string) => void;
   onApplyBest: (best: {
+    strategyId: string;
     params: Record<string, number>;
     risk: typeof DEFAULT_RISK;
   }) => void;
@@ -82,11 +85,27 @@ export function OptimizerPage({
   interval: initialInterval,
   lookbackDays: initialDays,
   initialCapital: initialCap,
+  selectedStrategyId,
+  onSelectedStrategyIdChange,
   onApplyBest,
 }: Props) {
   const stratsQ = useListStrategies();
   const strategies: StrategyMeta[] = stratsQ.data?.strategies ?? [];
-  const strategy = strategies[0];
+  // Available strategies only — params on stub strategies aren't meaningful.
+  const availableStrategies = useMemo(
+    () => strategies.filter((s) => s.available !== false),
+    [strategies],
+  );
+  // Resolve the active strategy from the parent-provided ID, falling back to
+  // the first available strategy if the ID is empty or unknown (e.g. on
+  // first load before the user picks one).
+  const strategy: StrategyMeta | undefined = useMemo(() => {
+    if (selectedStrategyId) {
+      const match = strategies.find((s) => s.id === selectedStrategyId);
+      if (match) return match;
+    }
+    return availableStrategies[0];
+  }, [selectedStrategyId, strategies, availableStrategies]);
 
   const [interval, setInterval] = useState<IntervalValue>(initialInterval);
   const [lookbackDays, setLookbackDays] = useState(initialDays);
@@ -179,6 +198,36 @@ export function OptimizerPage({
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4 pt-0 space-y-3">
+            <Field
+              label="Strategy"
+              hint={
+                strategy
+                  ? `${strategy.params.length} param${strategy.params.length === 1 ? "" : "s"}`
+                  : "loading…"
+              }
+              control={
+                <Select
+                  value={strategy?.id ?? ""}
+                  onValueChange={(v) => onSelectedStrategyIdChange(v)}
+                  disabled={availableStrategies.length === 0}
+                >
+                  <SelectTrigger className="h-8 font-mono text-xs">
+                    <SelectValue placeholder="Pick strategy…" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[320px]">
+                    {availableStrategies.map((s) => (
+                      <SelectItem
+                        key={s.id}
+                        value={s.id}
+                        className="font-mono text-xs"
+                      >
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              }
+            />
             <Field
               label="Timeframe"
               control={
@@ -333,15 +382,18 @@ export function OptimizerPage({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() =>
+                  disabled={!strategy}
+                  onClick={() => {
+                    if (!strategy) return;
                     onApplyBest({
+                      strategyId: strategy.id,
                       params: result.best.params,
                       risk: result.best.risk,
-                    })
-                  }
+                    });
+                  }}
                   className="font-mono text-[10px] uppercase tracking-wider"
                 >
-                  Apply to Lab
+                  Apply to Lab →
                 </Button>
               </CardHeader>
               <CardContent className="px-4 pb-4 pt-0 space-y-3">
@@ -622,12 +674,19 @@ export function OptimizerPage({
                                 <Button
                                   size="sm"
                                   variant="ghost"
+                                  disabled={!strategy}
                                   className="h-6 px-2 text-[9px] font-mono uppercase"
-                                  onClick={() =>
-                                    onApplyBest({ params: r.params, risk: r.risk })
-                                  }
+                                  title="Open this combination in the Lab"
+                                  onClick={() => {
+                                    if (!strategy) return;
+                                    onApplyBest({
+                                      strategyId: strategy.id,
+                                      params: r.params,
+                                      risk: r.risk,
+                                    });
+                                  }}
                                 >
-                                  use
+                                  Lab →
                                 </Button>
                               </td>
                             </tr>

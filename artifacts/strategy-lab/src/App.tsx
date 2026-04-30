@@ -35,6 +35,10 @@ function Shell() {
       return "";
     }
   });
+  // Independent strategy selection for the Optimizer so picking a strategy
+  // there doesn't disturb the user's current Lab session, and so the
+  // Tournament → Optimizer handoff can target a specific strategy.
+  const [optimizerStrategyId, setOptimizerStrategyId] = useState<string>("");
 
   // Persist the user's most recent strategy choice across reloads (FIX 8).
   useEffect(() => {
@@ -102,6 +106,13 @@ function Shell() {
                 setParamValues({});
                 setTab("lab");
               }}
+              onOptimize={(strategyId) => {
+                // Hand off from Tournament leaderboard → Optimizer with the
+                // chosen strategy preselected so the user can immediately
+                // sweep its parameter grid.
+                setOptimizerStrategyId(strategyId);
+                setTab("optimizer");
+              }}
             />
           </TabsContent>
           <TabsContent value="optimizer" className="mt-0">
@@ -109,7 +120,14 @@ function Shell() {
               interval={config.interval}
               lookbackDays={config.lookbackDays}
               initialCapital={config.initialCapital}
-              onApplyBest={({ params, risk }) => {
+              selectedStrategyId={optimizerStrategyId}
+              onSelectedStrategyIdChange={setOptimizerStrategyId}
+              onApplyBest={({ strategyId, params, risk }) => {
+                // Optimizer → Lab: switch the Lab strategy (so the param set
+                // is interpreted by the right engine), copy the winning
+                // params, and merge the winning risk overrides into the Lab
+                // config. The other LabConfig fields are preserved.
+                setSelectedStrategyId(strategyId);
                 setParamValues(params);
                 setConfig((c) => ({ ...c, risk: { ...c.risk, ...risk } }));
                 setTab("lab");

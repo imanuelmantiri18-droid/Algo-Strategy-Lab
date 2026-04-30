@@ -31,11 +31,12 @@ const categoryLabel: Record<string, string> = {
 type Props = {
   baseConfig: LabConfig;
   onApply: (strategyId: string) => void;
+  onOptimize: (strategyId: string) => void;
 };
 
 type SortKey = "robustness" | "oosApy" | "oosReturn" | "isApy" | "sharpe" | "drawdown";
 
-export function TournamentPage({ baseConfig, onApply }: Props) {
+export function TournamentPage({ baseConfig, onApply, onOptimize }: Props) {
   const runM = useTournamentStream();
   const [splitDate, setSplitDate] = useState<string>(
     baseConfig.walkForwardSplitDate ?? "2025-01-01",
@@ -348,7 +349,12 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
               </CardTitle>
             </CardHeader>
             <CardContent className="px-4 pb-4 pt-0">
-              <BestRow row={result.best} onApply={onApply} initialCapital={baseConfig.initialCapital} />
+              <BestRow
+                row={result.best}
+                onApply={onApply}
+                onOptimize={onOptimize}
+                initialCapital={baseConfig.initialCapital}
+              />
             </CardContent>
           </Card>
         ) : null}
@@ -418,6 +424,7 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
                         rank={i + 1}
                         row={r}
                         onApply={onApply}
+                        onOptimize={onOptimize}
                       />
                     ))}
                   </tbody>
@@ -493,10 +500,12 @@ function Row({
   rank,
   row,
   onApply,
+  onOptimize,
 }: {
   rank: number;
   row: TournamentRow;
   onApply: (strategyId: string) => void;
+  onOptimize: (strategyId: string) => void;
 }) {
   const oos = row.outOfSample;
   const apyColor =
@@ -536,7 +545,18 @@ function Row({
       <td className="py-1.5 px-2 text-right">
         <span className="text-primary">{formatNumber(row.robustnessScore, 2)}</span>
       </td>
-      <td className="py-1.5 px-2 text-right">
+      <td className="py-1.5 px-2 text-right whitespace-nowrap">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 text-[10px] font-mono px-2"
+          disabled={!!row.error}
+          onClick={() => onOptimize(row.strategyId)}
+          title="Send this strategy to the Optimizer to sweep its parameters"
+        >
+          Optimize
+        </Button>
         <Button
           type="button"
           variant="ghost"
@@ -544,8 +564,9 @@ function Row({
           className="h-6 text-[10px] font-mono px-2"
           disabled={!!row.error}
           onClick={() => onApply(row.strategyId)}
+          title="Open this strategy in the Lab"
         >
-          Open →
+          Lab →
         </Button>
       </td>
     </tr>
@@ -555,10 +576,12 @@ function Row({
 function BestRow({
   row,
   onApply,
+  onOptimize,
   initialCapital,
 }: {
   row: TournamentRow;
   onApply: (id: string) => void;
+  onOptimize: (id: string) => void;
   initialCapital: number;
 }) {
   const oos = row.outOfSample;
@@ -576,6 +599,15 @@ function BestRow({
           <Badge variant="outline" className={cn("font-mono text-[10px]", getVerdictColor(verdict))}>
             {verdict.toUpperCase()}
           </Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 font-mono text-[11px] uppercase tracking-wider"
+            onClick={() => onOptimize(row.strategyId)}
+            title="Sweep this strategy's parameter grid in the Optimizer"
+          >
+            Optimize ↗
+          </Button>
           <Button
             size="sm"
             className="h-8 font-mono text-[11px] uppercase tracking-wider"
