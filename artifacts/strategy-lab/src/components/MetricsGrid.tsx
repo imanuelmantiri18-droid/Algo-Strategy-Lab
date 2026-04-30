@@ -135,11 +135,19 @@ export function MetricsGrid({ metrics, initialCapital, walkForward }: Props) {
               </Badge>
             </div>
             <div className="text-[10px] text-muted-foreground/80 font-mono mb-3">
-              Split at {formatDateTime(walkForward.splitDate)} · OOS APY ÷ IS APY
+              Split at {formatDateTime(walkForward.splitDate)} · geometric mean
+              of OOS/IS APY × OOS/IS Sharpe (clamped to [0, 1.5]).
             </div>
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
-              <SamplePanel label="In-Sample (training)" m={walkForward.inSample} />
-              <SamplePanel label="Out-of-Sample (forward)" m={walkForward.outOfSample} />
+              <SamplePanel
+                label="In-Sample (training)"
+                m={walkForward.inSample}
+              />
+              <SamplePanel
+                label="Out-of-Sample (forward)"
+                m={walkForward.outOfSample}
+                compareTo={walkForward.inSample}
+              />
             </div>
           </div>
         </>
@@ -148,7 +156,27 @@ export function MetricsGrid({ metrics, initialCapital, walkForward }: Props) {
   );
 }
 
-function SamplePanel({ label, m }: { label: string; m: BacktestMetrics }) {
+function deltaTone(delta: number, lowerIsBetter = false): string {
+  if (Math.abs(delta) < 1e-6) return "text-muted-foreground/70";
+  const positive = lowerIsBetter ? delta < 0 : delta > 0;
+  return positive ? "text-emerald-300/80" : "text-red-300/80";
+}
+
+function fmtDelta(delta: number, suffix = "") {
+  if (!Number.isFinite(delta) || Math.abs(delta) < 1e-6) return "—";
+  const sign = delta > 0 ? "+" : "";
+  return `${sign}${formatNumber(delta, 1)}${suffix}`;
+}
+
+function SamplePanel({
+  label,
+  m,
+  compareTo,
+}: {
+  label: string;
+  m: BacktestMetrics;
+  compareTo?: BacktestMetrics;
+}) {
   return (
     <div className="rounded-lg border border-card-border bg-card/40 p-3 space-y-2">
       <div className="flex items-center justify-between">
@@ -165,7 +193,7 @@ function SamplePanel({ label, m }: { label: string; m: BacktestMetrics }) {
           {m.verdict}
         </Badge>
       </div>
-      <div className="grid grid-cols-2 gap-1 text-[11px] font-mono">
+      <div className="grid grid-cols-[auto_1fr_auto] gap-x-2 gap-y-1 text-[11px] font-mono items-baseline">
         <div className="text-muted-foreground">APY</div>
         <div
           className={cn(
@@ -175,18 +203,69 @@ function SamplePanel({ label, m }: { label: string; m: BacktestMetrics }) {
         >
           {formatPercent(m.annualReturnPct)}
         </div>
+        <div
+          className={cn(
+            "text-right text-[10px] tabular-nums w-14",
+            compareTo
+              ? deltaTone(m.annualReturnPct - compareTo.annualReturnPct)
+              : "text-transparent",
+          )}
+        >
+          {compareTo
+            ? fmtDelta(m.annualReturnPct - compareTo.annualReturnPct, "%")
+            : ""}
+        </div>
+
         <div className="text-muted-foreground">Max DD</div>
         <div className="text-right text-red-300">
           {formatPercent(m.maxDrawdownPct)}
         </div>
+        <div
+          className={cn(
+            "text-right text-[10px] tabular-nums w-14",
+            compareTo
+              ? deltaTone(m.maxDrawdownPct - compareTo.maxDrawdownPct, true)
+              : "text-transparent",
+          )}
+        >
+          {compareTo
+            ? fmtDelta(m.maxDrawdownPct - compareTo.maxDrawdownPct, "%")
+            : ""}
+        </div>
+
         <div className="text-muted-foreground">Sharpe</div>
         <div className="text-right">{formatNumber(m.sharpe, 2)}</div>
+        <div
+          className={cn(
+            "text-right text-[10px] tabular-nums w-14",
+            compareTo
+              ? deltaTone(m.sharpe - compareTo.sharpe)
+              : "text-transparent",
+          )}
+        >
+          {compareTo ? fmtDelta(m.sharpe - compareTo.sharpe) : ""}
+        </div>
+
         <div className="text-muted-foreground">Trades</div>
         <div className="text-right">{m.trades}</div>
+        <div className="text-transparent w-14"></div>
+
         <div className="text-muted-foreground">Win%</div>
         <div className="text-right">{formatNumber(m.winRate, 0)}%</div>
+        <div
+          className={cn(
+            "text-right text-[10px] tabular-nums w-14",
+            compareTo
+              ? deltaTone(m.winRate - compareTo.winRate)
+              : "text-transparent",
+          )}
+        >
+          {compareTo ? fmtDelta(m.winRate - compareTo.winRate, "%") : ""}
+        </div>
+
         <div className="text-muted-foreground">Final</div>
         <div className="text-right">{formatDollar(m.finalEquity)}</div>
+        <div className="text-transparent w-14"></div>
       </div>
     </div>
   );

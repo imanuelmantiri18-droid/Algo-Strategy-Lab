@@ -42,7 +42,15 @@ router.post("/backtest/run", async (req, res, next) => {
       return;
     }
     const result: BacktestResult = runBacktest(strat, candles, body);
-    res.json(result);
+    // OPT 4: cap chart payload size for very large lookbacks. Keep raw data
+    // server-side for metric computation; downsample only what we ship.
+    const CHART_TARGET = 2000;
+    const slim: BacktestResult = {
+      ...result,
+      candles: downsampleByStride(result.candles, CHART_TARGET),
+      equityCurve: downsampleByStride(result.equityCurve, CHART_TARGET),
+    };
+    res.json(slim);
   } catch (err) {
     next(err);
   }
@@ -61,7 +69,28 @@ const RISK_KEYS = new Set([
   "makerFeePct",
   "takerFeePct",
   "slippagePct",
+  "riskPerTradePct",
+  "fundingRatePct8h",
+  "maxHoldingBars",
 ]);
+
+/**
+ * OPT 4: When the equity/price series is large, the JSON payload back to the
+ * browser dominates response time. We deliver every trade, but the chart
+ * series get downsampled to a manageable target so the wire payload (and
+ * client paint cost) stays bounded. Trade entries/exits remain referenced by
+ * timestamp, so visually the chart still aligns even with stride > 1.
+ */
+function downsampleByStride<T>(arr: T[], target: number): T[] {
+  if (arr.length <= target || target <= 0) return arr;
+  const stride = Math.ceil(arr.length / target);
+  if (stride <= 1) return arr;
+  const out: T[] = [];
+  for (let i = 0; i < arr.length; i += stride) out.push(arr[i]!);
+  // Always include the last bar so the chart's right edge is accurate.
+  if (out[out.length - 1] !== arr[arr.length - 1]) out.push(arr[arr.length - 1]!);
+  return out;
+}
 
 function buildCombos(
   baseParams: Record<string, number>,
@@ -236,7 +265,14 @@ async function runOptimizerLoop(
         walkForwardSplit: body.walkForwardSplit,
       };
       const m = runBacktestMetricsOnly(strat!, candles, r);
-      const filtered = Math.abs(m.inSample.maxDrawdownPct) > ddFilter;
+      // BUG 2 fix: a strategy that "passes" IS but blows up OOS must be
+      // dropped — overfit blowups were previously slipping through the
+      // leaderboard. Filter on the worse of the two segments.
+      const worstDD = Math.max(
+        Math.abs(m.inSample.maxDrawdownPct),
+        Math.abs(m.outOfSample.maxDrawdownPct),
+      );
+      const filtered = worstDD > ddFilter;
       if (filtered) dropped++;
       else kept++;
       rows.push({
@@ -434,6 +470,129 @@ function defaultParamsFor(stratId: string): Record<string, number> {
   return out;
 }
 
+type TournamentBody = {
+  interval: string;
+  lookbackDays: number;
+  initialCapital: number;
+  risk: RiskConfig;
+  walkForwardSplit?: number;
+  walkForwardSplitDate?: string;
+  strategyIds?: string[];
+  maxDrawdownFilterPct?: number;
+};
+
+type TournamentEval = {
+  rows: TournamentRow[];
+  kept: number;
+  dropped: number;
+  ids: string[];
+  splitDateUsed: string;
+};
+
+async function runTournamentLoop(
+  body: TournamentBody,
+  candles: Awaited<ReturnType<typeof getBtcHistory>>,
+  ddFilter: number,
+  onRow: ((row: TournamentRow, doneCount: number, total: number) => void) | undefined,
+  isCancelled?: () => boolean,
+): Promise<TournamentEval> {
+  const ids = body.strategyIds && body.strategyIds.length > 0
+    ? body.strategyIds.filter((id) => !!getStrategy(id))
+    : availableStrategies().map((s) => s.id);
+
+  const rows: TournamentRow[] = [];
+  let kept = 0;
+  let dropped = 0;
+
+  // OPT 1: yield to event loop in batches of 8 so a long tournament cannot
+  // block other API requests for seconds at a time.
+  const BATCH = 8;
+  for (let start = 0; start < ids.length; start += BATCH) {
+    if (isCancelled?.()) break;
+    const end = Math.min(start + BATCH, ids.length);
+    for (let i = start; i < end; i++) {
+      const id = ids[i]!;
+      const s = getStrategy(id)!;
+      let row: TournamentRow;
+      if (s.available === false) {
+        row = {
+          strategyId: s.id,
+          strategyName: s.name,
+          category: s.category,
+          inSample: emptyTournamentMetrics(),
+          outOfSample: emptyTournamentMetrics(),
+          robustnessScore: 0,
+          filtered: true,
+          error: s.unavailableReason ?? "unavailable",
+        };
+        dropped++;
+      } else {
+        try {
+          const r = {
+            strategyId: id,
+            params: defaultParamsFor(id),
+            interval: body.interval as Interval,
+            lookbackDays: body.lookbackDays,
+            initialCapital: body.initialCapital,
+            risk: body.risk,
+            walkForwardSplit: body.walkForwardSplit,
+            walkForwardSplitDate: body.walkForwardSplitDate,
+          };
+          const m = runBacktestMetricsOnly(s, candles, r);
+          // BUG 2 fix: a strategy that "passes" IS DD but blows up OOS must
+          // not be allowed to win — filter on the worse of the two segments.
+          const worstDD = Math.max(
+            Math.abs(m.inSample.maxDrawdownPct),
+            Math.abs(m.outOfSample.maxDrawdownPct),
+          );
+          const filtered = worstDD > ddFilter;
+          if (filtered) dropped++;
+          else kept++;
+          row = {
+            strategyId: s.id,
+            strategyName: s.name,
+            category: s.category,
+            inSample: m.inSample,
+            outOfSample: m.outOfSample,
+            robustnessScore: m.robustnessScore,
+            filtered,
+          };
+        } catch (e) {
+          dropped++;
+          row = {
+            strategyId: s.id,
+            strategyName: s.name,
+            category: s.category,
+            inSample: emptyTournamentMetrics(),
+            outOfSample: emptyTournamentMetrics(),
+            robustnessScore: 0,
+            filtered: true,
+            error: (e as Error).message,
+          };
+        }
+      }
+      rows.push(row);
+      onRow?.(row, rows.length, ids.length);
+    }
+    // Yield between batches so the event loop can serve other requests.
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  rows.sort((a, b) => {
+    if (a.filtered !== b.filtered) return a.filtered ? 1 : -1;
+    return b.outOfSample.annualReturnPct - a.outOfSample.annualReturnPct;
+  });
+
+  let splitDateUsed = body.walkForwardSplitDate ?? "";
+  if (!splitDateUsed) {
+    const split = body.walkForwardSplit ?? 0.7;
+    const idx = Math.floor(candles.length * split);
+    splitDateUsed = candles[Math.min(idx, candles.length - 1)]?.t ?? "";
+  }
+
+  return { rows, kept, dropped, ids, splitDateUsed };
+}
+
 router.post("/backtest/tournament", async (req, res, next) => {
   const parsed = RunTournamentBody.safeParse(req.body);
   if (!parsed.success) {
@@ -454,94 +613,130 @@ router.post("/backtest/tournament", async (req, res, next) => {
     }
 
     const ddFilter = body.maxDrawdownFilterPct ?? 40;
-    const ids = body.strategyIds && body.strategyIds.length > 0
-      ? body.strategyIds.filter((id) => !!getStrategy(id))
-      : availableStrategies().map((s) => s.id);
+    const result = await runTournamentLoop(
+      body as TournamentBody,
+      candles,
+      ddFilter,
+      undefined,
+    );
 
-    const rows: TournamentRow[] = [];
-    let kept = 0;
-    let dropped = 0;
-    for (const id of ids) {
-      const s = getStrategy(id)!;
-      if (s.available === false) {
-        rows.push({
-          strategyId: s.id,
-          strategyName: s.name,
-          category: s.category,
-          inSample: emptyTournamentMetrics(),
-          outOfSample: emptyTournamentMetrics(),
-          robustnessScore: 0,
-          filtered: true,
-          error: s.unavailableReason ?? "unavailable",
-        });
-        dropped++;
-        continue;
-      }
-      try {
-        const r = {
-          strategyId: id,
-          params: defaultParamsFor(id),
-          interval: body.interval as Interval,
-          lookbackDays: body.lookbackDays,
-          initialCapital: body.initialCapital,
-          risk: body.risk as RiskConfig,
-          walkForwardSplit: body.walkForwardSplit,
-          walkForwardSplitDate: body.walkForwardSplitDate,
-        };
-        const m = runBacktestMetricsOnly(s, candles, r);
-        const filtered = Math.abs(m.inSample.maxDrawdownPct) > ddFilter;
-        if (filtered) dropped++;
-        else kept++;
-        rows.push({
-          strategyId: s.id,
-          strategyName: s.name,
-          category: s.category,
-          inSample: m.inSample,
-          outOfSample: m.outOfSample,
-          robustnessScore: m.robustnessScore,
-          filtered,
-        });
-      } catch (e) {
-        dropped++;
-        rows.push({
-          strategyId: s.id,
-          strategyName: s.name,
-          category: s.category,
-          inSample: emptyTournamentMetrics(),
-          outOfSample: emptyTournamentMetrics(),
-          robustnessScore: 0,
-          filtered: true,
-          error: (e as Error).message,
-        });
-      }
-    }
-
-    rows.sort((a, b) => {
-      if (a.filtered !== b.filtered) return a.filtered ? 1 : -1;
-      return b.outOfSample.annualReturnPct - a.outOfSample.annualReturnPct;
-    });
-
-    const best = rows.find((r) => !r.filtered);
-
-    // Determine actual split date used
-    let splitDateUsed = body.walkForwardSplitDate ?? "";
-    if (!splitDateUsed) {
-      const split = body.walkForwardSplit ?? 0.7;
-      const idx = Math.floor(candles.length * split);
-      splitDateUsed = candles[Math.min(idx, candles.length - 1)]?.t ?? "";
-    }
+    const best = result.rows.find((r) => !r.filtered);
 
     res.json({
-      rows,
+      rows: result.rows,
       best,
-      totalStrategies: ids.length,
-      kept,
-      dropped,
+      totalStrategies: result.ids.length,
+      kept: result.kept,
+      dropped: result.dropped,
       drawdownFilterPct: ddFilter,
-      splitDate: splitDateUsed,
+      splitDate: result.splitDateUsed,
     });
   } catch (err) {
     next(err);
+  }
+});
+
+// ---------------- SSE streaming tournament ----------------
+
+router.post("/backtest/tournament/stream", async (req, res, next) => {
+  const parsed = RunTournamentBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid body", issues: parsed.error.issues });
+    return;
+  }
+  const body = parsed.data;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  let cancelled = false;
+  res.on("close", () => {
+    if (!res.writableEnded) cancelled = true;
+  });
+
+  try {
+    send("status", {
+      phase: "fetching",
+      message: "Fetching BTC/USDT klines from Binance…",
+    });
+    const candles = await getBtcHistory(
+      body.interval as Interval,
+      body.lookbackDays,
+    );
+    if (candles.length < 100) {
+      send("error", {
+        message: `Not enough candles fetched (${candles.length}).`,
+      });
+      res.end();
+      return;
+    }
+
+    const ddFilter = body.maxDrawdownFilterPct ?? 40;
+    const ids =
+      body.strategyIds && body.strategyIds.length > 0
+        ? body.strategyIds.filter((id) => !!getStrategy(id))
+        : availableStrategies().map((s) => s.id);
+
+    send("started", {
+      totalStrategies: ids.length,
+      candleCount: candles.length,
+      drawdownFilterPct: ddFilter,
+    });
+
+    const startedAt = Date.now();
+    let lastProgressEmit = 0;
+
+    const evalResult = await runTournamentLoop(
+      body as TournamentBody,
+      candles,
+      ddFilter,
+      (row, done, total) => {
+        if (cancelled) return;
+        send("result", { row, done, total });
+        const now = Date.now();
+        if (now - lastProgressEmit < 200 && done < total) return;
+        lastProgressEmit = now;
+        const elapsedMs = now - startedAt;
+        const rate = done > 0 ? done / (elapsedMs / 1000) : 0;
+        const remaining = Math.max(0, total - done);
+        const etaMs = rate > 0 ? Math.round((remaining / rate) * 1000) : 0;
+        send("progress", { done, total, elapsedMs, etaMs, rate });
+      },
+      () => cancelled,
+    );
+
+    if (cancelled) {
+      res.end();
+      return;
+    }
+
+    const best = evalResult.rows.find((r) => !r.filtered);
+    send("done", {
+      rows: evalResult.rows,
+      best,
+      totalStrategies: evalResult.ids.length,
+      kept: evalResult.kept,
+      dropped: evalResult.dropped,
+      drawdownFilterPct: ddFilter,
+      splitDate: evalResult.splitDateUsed,
+      elapsedMs: Date.now() - startedAt,
+    });
+    res.end();
+  } catch (err) {
+    try {
+      send("error", { message: (err as Error)?.message ?? "Unknown error" });
+      res.end();
+    } catch {
+      next(err);
+    }
   }
 });
 
@@ -566,6 +761,7 @@ function emptyTournamentMetrics(): ReturnType<
     avgLossPct: 0,
     finalEquity: 0,
     liquidations: 0,
+    fundingPaid: 0,
     verdict: "poor" as const,
   };
 }

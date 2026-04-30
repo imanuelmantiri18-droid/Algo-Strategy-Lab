@@ -122,6 +122,16 @@ export const runBacktestBodyRiskTakerFeePctMax = 1;
 export const runBacktestBodyRiskSlippagePctMin = 0;
 export const runBacktestBodyRiskSlippagePctMax = 1;
 
+export const runBacktestBodyRiskRiskPerTradePctDefault = 100;
+export const runBacktestBodyRiskRiskPerTradePctMax = 100;
+
+export const runBacktestBodyRiskFundingRatePct8hDefault = 0.01;
+export const runBacktestBodyRiskFundingRatePct8hMin = 0;
+export const runBacktestBodyRiskFundingRatePct8hMax = 1;
+
+export const runBacktestBodyRiskMaxHoldingBarsDefault = 0;
+export const runBacktestBodyRiskMaxHoldingBarsMin = 0;
+
 export const runBacktestBodyWalkForwardSplitDefault = 0.7;
 export const runBacktestBodyWalkForwardSplitMin = 0.3;
 export const runBacktestBodyWalkForwardSplitMax = 0.9;
@@ -176,6 +186,29 @@ export const RunBacktestBody = zod.object({
       .min(runBacktestBodyRiskSlippagePctMin)
       .max(runBacktestBodyRiskSlippagePctMax)
       .describe("Slippage % applied to market orders (entries and SL exits)"),
+    riskPerTradePct: zod
+      .number()
+      .min(1)
+      .max(runBacktestBodyRiskRiskPerTradePctMax)
+      .default(runBacktestBodyRiskRiskPerTradePctDefault)
+      .describe(
+        "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+      ),
+    fundingRatePct8h: zod
+      .number()
+      .min(runBacktestBodyRiskFundingRatePct8hMin)
+      .max(runBacktestBodyRiskFundingRatePct8hMax)
+      .default(runBacktestBodyRiskFundingRatePct8hDefault)
+      .describe(
+        "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+      ),
+    maxHoldingBars: zod
+      .number()
+      .min(runBacktestBodyRiskMaxHoldingBarsMin)
+      .default(runBacktestBodyRiskMaxHoldingBarsDefault)
+      .describe(
+        "Max bars a position may stay open before forced market close. 0 = disabled.",
+      ),
   }),
   walkForwardSplit: zod
     .number()
@@ -218,6 +251,16 @@ export const runBacktestResponseRequestRiskTakerFeePctMax = 1;
 
 export const runBacktestResponseRequestRiskSlippagePctMin = 0;
 export const runBacktestResponseRequestRiskSlippagePctMax = 1;
+
+export const runBacktestResponseRequestRiskRiskPerTradePctDefault = 100;
+export const runBacktestResponseRequestRiskRiskPerTradePctMax = 100;
+
+export const runBacktestResponseRequestRiskFundingRatePct8hDefault = 0.01;
+export const runBacktestResponseRequestRiskFundingRatePct8hMin = 0;
+export const runBacktestResponseRequestRiskFundingRatePct8hMax = 1;
+
+export const runBacktestResponseRequestRiskMaxHoldingBarsDefault = 0;
+export const runBacktestResponseRequestRiskMaxHoldingBarsMin = 0;
 
 export const runBacktestResponseRequestWalkForwardSplitDefault = 0.7;
 export const runBacktestResponseRequestWalkForwardSplitMin = 0.3;
@@ -277,6 +320,29 @@ export const RunBacktestResponse = zod.object({
         .min(runBacktestResponseRequestRiskSlippagePctMin)
         .max(runBacktestResponseRequestRiskSlippagePctMax)
         .describe("Slippage % applied to market orders (entries and SL exits)"),
+      riskPerTradePct: zod
+        .number()
+        .min(1)
+        .max(runBacktestResponseRequestRiskRiskPerTradePctMax)
+        .default(runBacktestResponseRequestRiskRiskPerTradePctDefault)
+        .describe(
+          "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+        ),
+      fundingRatePct8h: zod
+        .number()
+        .min(runBacktestResponseRequestRiskFundingRatePct8hMin)
+        .max(runBacktestResponseRequestRiskFundingRatePct8hMax)
+        .default(runBacktestResponseRequestRiskFundingRatePct8hDefault)
+        .describe(
+          "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+        ),
+      maxHoldingBars: zod
+        .number()
+        .min(runBacktestResponseRequestRiskMaxHoldingBarsMin)
+        .default(runBacktestResponseRequestRiskMaxHoldingBarsDefault)
+        .describe(
+          "Max bars a position may stay open before forced market close. 0 = disabled.",
+        ),
     }),
     walkForwardSplit: zod
       .number()
@@ -308,6 +374,11 @@ export const RunBacktestResponse = zod.object({
     avgLossPct: zod.number(),
     finalEquity: zod.number(),
     liquidations: zod.number(),
+    fundingPaid: zod
+      .number()
+      .describe(
+        "Total funding cost paid across all closed trades in this segment ($).",
+      ),
     verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
   }),
   walkForward: zod.object({
@@ -327,6 +398,11 @@ export const RunBacktestResponse = zod.object({
       avgLossPct: zod.number(),
       finalEquity: zod.number(),
       liquidations: zod.number(),
+      fundingPaid: zod
+        .number()
+        .describe(
+          "Total funding cost paid across all closed trades in this segment ($).",
+        ),
       verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
     }),
     outOfSample: zod.object({
@@ -344,12 +420,17 @@ export const RunBacktestResponse = zod.object({
       avgLossPct: zod.number(),
       finalEquity: zod.number(),
       liquidations: zod.number(),
+      fundingPaid: zod
+        .number()
+        .describe(
+          "Total funding cost paid across all closed trades in this segment ($).",
+        ),
       verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
     }),
     robustnessScore: zod
       .number()
       .describe(
-        "Ratio of OOS APY to IS APY (1.0 = no degradation, <0.5 = likely overfit)",
+        "Bounded 0–1 robustness — geometric mean of (a) OOS\/IS consistency\n(clamped 0..1 with 1.0 ≈ OOS APY ≥ IS APY) and (b) OOS absolute\nquality (normalized to a 200% APY ceiling). 0 = poor, 1 = excellent\nand consistent train-vs-test performance.\n",
       ),
   }),
   equityCurve: zod.array(
@@ -371,12 +452,18 @@ export const RunBacktestResponse = zod.object({
       pnl: zod.number(),
       pnlPct: zod.number(),
       feePaid: zod.number(),
+      fundingPaid: zod
+        .number()
+        .describe(
+          "Total funding paid for this position over its lifetime ($).",
+        ),
       exitReason: zod.enum([
         "stop_loss",
         "take_profit",
         "signal_exit",
         "end_of_data",
         "liquidation",
+        "time_stop",
       ]),
       sample: zod.enum(["in_sample", "out_of_sample"]),
     }),
@@ -418,6 +505,16 @@ export const runOptimizationBodyBaseRiskTakerFeePctMax = 1;
 
 export const runOptimizationBodyBaseRiskSlippagePctMin = 0;
 export const runOptimizationBodyBaseRiskSlippagePctMax = 1;
+
+export const runOptimizationBodyBaseRiskRiskPerTradePctDefault = 100;
+export const runOptimizationBodyBaseRiskRiskPerTradePctMax = 100;
+
+export const runOptimizationBodyBaseRiskFundingRatePct8hDefault = 0.01;
+export const runOptimizationBodyBaseRiskFundingRatePct8hMin = 0;
+export const runOptimizationBodyBaseRiskFundingRatePct8hMax = 1;
+
+export const runOptimizationBodyBaseRiskMaxHoldingBarsDefault = 0;
+export const runOptimizationBodyBaseRiskMaxHoldingBarsMin = 0;
 
 export const runOptimizationBodyWalkForwardSplitDefault = 0.7;
 export const runOptimizationBodyWalkForwardSplitMin = 0.3;
@@ -479,6 +576,29 @@ export const RunOptimizationBody = zod.object({
       .min(runOptimizationBodyBaseRiskSlippagePctMin)
       .max(runOptimizationBodyBaseRiskSlippagePctMax)
       .describe("Slippage % applied to market orders (entries and SL exits)"),
+    riskPerTradePct: zod
+      .number()
+      .min(1)
+      .max(runOptimizationBodyBaseRiskRiskPerTradePctMax)
+      .default(runOptimizationBodyBaseRiskRiskPerTradePctDefault)
+      .describe(
+        "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+      ),
+    fundingRatePct8h: zod
+      .number()
+      .min(runOptimizationBodyBaseRiskFundingRatePct8hMin)
+      .max(runOptimizationBodyBaseRiskFundingRatePct8hMax)
+      .default(runOptimizationBodyBaseRiskFundingRatePct8hDefault)
+      .describe(
+        "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+      ),
+    maxHoldingBars: zod
+      .number()
+      .min(runOptimizationBodyBaseRiskMaxHoldingBarsMin)
+      .default(runOptimizationBodyBaseRiskMaxHoldingBarsDefault)
+      .describe(
+        "Max bars a position may stay open before forced market close. 0 = disabled.",
+      ),
   }),
   axes: zod.array(
     zod.object({
@@ -535,6 +655,16 @@ export const runOptimizationResponseRowsItemRiskTakerFeePctMax = 1;
 export const runOptimizationResponseRowsItemRiskSlippagePctMin = 0;
 export const runOptimizationResponseRowsItemRiskSlippagePctMax = 1;
 
+export const runOptimizationResponseRowsItemRiskRiskPerTradePctDefault = 100;
+export const runOptimizationResponseRowsItemRiskRiskPerTradePctMax = 100;
+
+export const runOptimizationResponseRowsItemRiskFundingRatePct8hDefault = 0.01;
+export const runOptimizationResponseRowsItemRiskFundingRatePct8hMin = 0;
+export const runOptimizationResponseRowsItemRiskFundingRatePct8hMax = 1;
+
+export const runOptimizationResponseRowsItemRiskMaxHoldingBarsDefault = 0;
+export const runOptimizationResponseRowsItemRiskMaxHoldingBarsMin = 0;
+
 export const runOptimizationResponseBestRiskLeverageMax = 50;
 
 export const runOptimizationResponseBestRiskAtrPeriodMin = 5;
@@ -554,6 +684,16 @@ export const runOptimizationResponseBestRiskTakerFeePctMax = 1;
 
 export const runOptimizationResponseBestRiskSlippagePctMin = 0;
 export const runOptimizationResponseBestRiskSlippagePctMax = 1;
+
+export const runOptimizationResponseBestRiskRiskPerTradePctDefault = 100;
+export const runOptimizationResponseBestRiskRiskPerTradePctMax = 100;
+
+export const runOptimizationResponseBestRiskFundingRatePct8hDefault = 0.01;
+export const runOptimizationResponseBestRiskFundingRatePct8hMin = 0;
+export const runOptimizationResponseBestRiskFundingRatePct8hMax = 1;
+
+export const runOptimizationResponseBestRiskMaxHoldingBarsDefault = 0;
+export const runOptimizationResponseBestRiskMaxHoldingBarsMin = 0;
 
 export const RunOptimizationResponse = zod.object({
   strategyId: zod.string(),
@@ -600,6 +740,29 @@ export const RunOptimizationResponse = zod.object({
           .describe(
             "Slippage % applied to market orders (entries and SL exits)",
           ),
+        riskPerTradePct: zod
+          .number()
+          .min(1)
+          .max(runOptimizationResponseRowsItemRiskRiskPerTradePctMax)
+          .default(runOptimizationResponseRowsItemRiskRiskPerTradePctDefault)
+          .describe(
+            "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+          ),
+        fundingRatePct8h: zod
+          .number()
+          .min(runOptimizationResponseRowsItemRiskFundingRatePct8hMin)
+          .max(runOptimizationResponseRowsItemRiskFundingRatePct8hMax)
+          .default(runOptimizationResponseRowsItemRiskFundingRatePct8hDefault)
+          .describe(
+            "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+          ),
+        maxHoldingBars: zod
+          .number()
+          .min(runOptimizationResponseRowsItemRiskMaxHoldingBarsMin)
+          .default(runOptimizationResponseRowsItemRiskMaxHoldingBarsDefault)
+          .describe(
+            "Max bars a position may stay open before forced market close. 0 = disabled.",
+          ),
       }),
       inSample: zod.object({
         totalReturnPct: zod.number(),
@@ -616,6 +779,11 @@ export const RunOptimizationResponse = zod.object({
         avgLossPct: zod.number(),
         finalEquity: zod.number(),
         liquidations: zod.number(),
+        fundingPaid: zod
+          .number()
+          .describe(
+            "Total funding cost paid across all closed trades in this segment ($).",
+          ),
         verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
       }),
       outOfSample: zod.object({
@@ -633,6 +801,11 @@ export const RunOptimizationResponse = zod.object({
         avgLossPct: zod.number(),
         finalEquity: zod.number(),
         liquidations: zod.number(),
+        fundingPaid: zod
+          .number()
+          .describe(
+            "Total funding cost paid across all closed trades in this segment ($).",
+          ),
         verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
       }),
       robustnessScore: zod.number(),
@@ -679,6 +852,29 @@ export const RunOptimizationResponse = zod.object({
         .min(runOptimizationResponseBestRiskSlippagePctMin)
         .max(runOptimizationResponseBestRiskSlippagePctMax)
         .describe("Slippage % applied to market orders (entries and SL exits)"),
+      riskPerTradePct: zod
+        .number()
+        .min(1)
+        .max(runOptimizationResponseBestRiskRiskPerTradePctMax)
+        .default(runOptimizationResponseBestRiskRiskPerTradePctDefault)
+        .describe(
+          "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+        ),
+      fundingRatePct8h: zod
+        .number()
+        .min(runOptimizationResponseBestRiskFundingRatePct8hMin)
+        .max(runOptimizationResponseBestRiskFundingRatePct8hMax)
+        .default(runOptimizationResponseBestRiskFundingRatePct8hDefault)
+        .describe(
+          "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+        ),
+      maxHoldingBars: zod
+        .number()
+        .min(runOptimizationResponseBestRiskMaxHoldingBarsMin)
+        .default(runOptimizationResponseBestRiskMaxHoldingBarsDefault)
+        .describe(
+          "Max bars a position may stay open before forced market close. 0 = disabled.",
+        ),
     }),
     inSample: zod.object({
       totalReturnPct: zod.number(),
@@ -695,6 +891,11 @@ export const RunOptimizationResponse = zod.object({
       avgLossPct: zod.number(),
       finalEquity: zod.number(),
       liquidations: zod.number(),
+      fundingPaid: zod
+        .number()
+        .describe(
+          "Total funding cost paid across all closed trades in this segment ($).",
+        ),
       verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
     }),
     outOfSample: zod.object({
@@ -712,6 +913,11 @@ export const RunOptimizationResponse = zod.object({
       avgLossPct: zod.number(),
       finalEquity: zod.number(),
       liquidations: zod.number(),
+      fundingPaid: zod
+        .number()
+        .describe(
+          "Total funding cost paid across all closed trades in this segment ($).",
+        ),
       verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
     }),
     robustnessScore: zod.number(),
@@ -755,6 +961,16 @@ export const runTournamentBodyRiskTakerFeePctMax = 1;
 
 export const runTournamentBodyRiskSlippagePctMin = 0;
 export const runTournamentBodyRiskSlippagePctMax = 1;
+
+export const runTournamentBodyRiskRiskPerTradePctDefault = 100;
+export const runTournamentBodyRiskRiskPerTradePctMax = 100;
+
+export const runTournamentBodyRiskFundingRatePct8hDefault = 0.01;
+export const runTournamentBodyRiskFundingRatePct8hMin = 0;
+export const runTournamentBodyRiskFundingRatePct8hMax = 1;
+
+export const runTournamentBodyRiskMaxHoldingBarsDefault = 0;
+export const runTournamentBodyRiskMaxHoldingBarsMin = 0;
 
 export const runTournamentBodyWalkForwardSplitDefault = 0.7;
 export const runTournamentBodyWalkForwardSplitMin = 0.3;
@@ -816,6 +1032,29 @@ export const RunTournamentBody = zod.object({
       .min(runTournamentBodyRiskSlippagePctMin)
       .max(runTournamentBodyRiskSlippagePctMax)
       .describe("Slippage % applied to market orders (entries and SL exits)"),
+    riskPerTradePct: zod
+      .number()
+      .min(1)
+      .max(runTournamentBodyRiskRiskPerTradePctMax)
+      .default(runTournamentBodyRiskRiskPerTradePctDefault)
+      .describe(
+        "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+      ),
+    fundingRatePct8h: zod
+      .number()
+      .min(runTournamentBodyRiskFundingRatePct8hMin)
+      .max(runTournamentBodyRiskFundingRatePct8hMax)
+      .default(runTournamentBodyRiskFundingRatePct8hDefault)
+      .describe(
+        "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+      ),
+    maxHoldingBars: zod
+      .number()
+      .min(runTournamentBodyRiskMaxHoldingBarsMin)
+      .default(runTournamentBodyRiskMaxHoldingBarsDefault)
+      .describe(
+        "Max bars a position may stay open before forced market close. 0 = disabled.",
+      ),
   }),
   walkForwardSplit: zod
     .number()
@@ -854,6 +1093,11 @@ export const RunTournamentResponse = zod.object({
         avgLossPct: zod.number(),
         finalEquity: zod.number(),
         liquidations: zod.number(),
+        fundingPaid: zod
+          .number()
+          .describe(
+            "Total funding cost paid across all closed trades in this segment ($).",
+          ),
         verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
       }),
       outOfSample: zod.object({
@@ -871,6 +1115,11 @@ export const RunTournamentResponse = zod.object({
         avgLossPct: zod.number(),
         finalEquity: zod.number(),
         liquidations: zod.number(),
+        fundingPaid: zod
+          .number()
+          .describe(
+            "Total funding cost paid across all closed trades in this segment ($).",
+          ),
         verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
       }),
       robustnessScore: zod.number(),
@@ -898,6 +1147,11 @@ export const RunTournamentResponse = zod.object({
         avgLossPct: zod.number(),
         finalEquity: zod.number(),
         liquidations: zod.number(),
+        fundingPaid: zod
+          .number()
+          .describe(
+            "Total funding cost paid across all closed trades in this segment ($).",
+          ),
         verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
       }),
       outOfSample: zod.object({
@@ -915,6 +1169,11 @@ export const RunTournamentResponse = zod.object({
         avgLossPct: zod.number(),
         finalEquity: zod.number(),
         liquidations: zod.number(),
+        fundingPaid: zod
+          .number()
+          .describe(
+            "Total funding cost paid across all closed trades in this segment ($).",
+          ),
         verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
       }),
       robustnessScore: zod.number(),
@@ -927,6 +1186,148 @@ export const RunTournamentResponse = zod.object({
   dropped: zod.number(),
   drawdownFilterPct: zod.number(),
   splitDate: zod.string().optional(),
+});
+
+/**
+ * @summary Server-Sent Events stream of tournament results. Emits `status`,
+`started`, per-strategy `result` rows as they finish, throttled
+`progress` ticks, and a final `done` event with the full leaderboard.
+
+ */
+export const runTournamentStreamBodyLookbackDaysMin = 7;
+export const runTournamentStreamBodyLookbackDaysMax = 1825;
+
+export const runTournamentStreamBodyInitialCapitalDefault = 1000;
+export const runTournamentStreamBodyInitialCapitalMin = 100;
+
+export const runTournamentStreamBodyRiskLeverageMax = 50;
+
+export const runTournamentStreamBodyRiskAtrPeriodMin = 5;
+export const runTournamentStreamBodyRiskAtrPeriodMax = 50;
+
+export const runTournamentStreamBodyRiskAtrMultiplierSLMin = 0.25;
+export const runTournamentStreamBodyRiskAtrMultiplierSLMax = 5;
+
+export const runTournamentStreamBodyRiskRiskRewardRatioMin = 0.5;
+export const runTournamentStreamBodyRiskRiskRewardRatioMax = 10;
+
+export const runTournamentStreamBodyRiskMakerFeePctMin = 0;
+export const runTournamentStreamBodyRiskMakerFeePctMax = 1;
+
+export const runTournamentStreamBodyRiskTakerFeePctMin = 0;
+export const runTournamentStreamBodyRiskTakerFeePctMax = 1;
+
+export const runTournamentStreamBodyRiskSlippagePctMin = 0;
+export const runTournamentStreamBodyRiskSlippagePctMax = 1;
+
+export const runTournamentStreamBodyRiskRiskPerTradePctDefault = 100;
+export const runTournamentStreamBodyRiskRiskPerTradePctMax = 100;
+
+export const runTournamentStreamBodyRiskFundingRatePct8hDefault = 0.01;
+export const runTournamentStreamBodyRiskFundingRatePct8hMin = 0;
+export const runTournamentStreamBodyRiskFundingRatePct8hMax = 1;
+
+export const runTournamentStreamBodyRiskMaxHoldingBarsDefault = 0;
+export const runTournamentStreamBodyRiskMaxHoldingBarsMin = 0;
+
+export const runTournamentStreamBodyWalkForwardSplitDefault = 0.7;
+export const runTournamentStreamBodyWalkForwardSplitMin = 0.3;
+export const runTournamentStreamBodyWalkForwardSplitMax = 0.9;
+
+export const runTournamentStreamBodyMaxDrawdownFilterPctDefault = 40;
+
+export const RunTournamentStreamBody = zod.object({
+  strategyIds: zod
+    .array(zod.string())
+    .optional()
+    .describe(
+      "Optional explicit list. If omitted, runs every available strategy with its default params.",
+    ),
+  interval: zod
+    .enum(["5m", "15m", "30m", "1h", "2h", "4h", "1d"])
+    .describe("Candle timeframe"),
+  lookbackDays: zod
+    .number()
+    .min(runTournamentStreamBodyLookbackDaysMin)
+    .max(runTournamentStreamBodyLookbackDaysMax),
+  initialCapital: zod
+    .number()
+    .min(runTournamentStreamBodyInitialCapitalMin)
+    .default(runTournamentStreamBodyInitialCapitalDefault),
+  risk: zod.object({
+    leverage: zod
+      .number()
+      .min(1)
+      .max(runTournamentStreamBodyRiskLeverageMax)
+      .describe("Linear leverage (10-20 recommended)"),
+    atrPeriod: zod
+      .number()
+      .min(runTournamentStreamBodyRiskAtrPeriodMin)
+      .max(runTournamentStreamBodyRiskAtrPeriodMax)
+      .describe("Period for ATR calculation (default 14)"),
+    atrMultiplierSL: zod
+      .number()
+      .min(runTournamentStreamBodyRiskAtrMultiplierSLMin)
+      .max(runTournamentStreamBodyRiskAtrMultiplierSLMax)
+      .describe("SL distance = ATR × this multiplier"),
+    riskRewardRatio: zod
+      .number()
+      .min(runTournamentStreamBodyRiskRiskRewardRatioMin)
+      .max(runTournamentStreamBodyRiskRiskRewardRatioMax)
+      .describe("TP distance = SL distance × this ratio"),
+    makerFeePct: zod
+      .number()
+      .min(runTournamentStreamBodyRiskMakerFeePctMin)
+      .max(runTournamentStreamBodyRiskMakerFeePctMax)
+      .describe("Maker fee % (e.g. 0.01 = 0.01% for limit fills like TP)"),
+    takerFeePct: zod
+      .number()
+      .min(runTournamentStreamBodyRiskTakerFeePctMin)
+      .max(runTournamentStreamBodyRiskTakerFeePctMax)
+      .describe("Taker fee % (e.g. 0.035 = 0.035% for market entries and SL)"),
+    slippagePct: zod
+      .number()
+      .min(runTournamentStreamBodyRiskSlippagePctMin)
+      .max(runTournamentStreamBodyRiskSlippagePctMax)
+      .describe("Slippage % applied to market orders (entries and SL exits)"),
+    riskPerTradePct: zod
+      .number()
+      .min(1)
+      .max(runTournamentStreamBodyRiskRiskPerTradePctMax)
+      .default(runTournamentStreamBodyRiskRiskPerTradePctDefault)
+      .describe(
+        "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+      ),
+    fundingRatePct8h: zod
+      .number()
+      .min(runTournamentStreamBodyRiskFundingRatePct8hMin)
+      .max(runTournamentStreamBodyRiskFundingRatePct8hMax)
+      .default(runTournamentStreamBodyRiskFundingRatePct8hDefault)
+      .describe(
+        "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+      ),
+    maxHoldingBars: zod
+      .number()
+      .min(runTournamentStreamBodyRiskMaxHoldingBarsMin)
+      .default(runTournamentStreamBodyRiskMaxHoldingBarsDefault)
+      .describe(
+        "Max bars a position may stay open before forced market close. 0 = disabled.",
+      ),
+  }),
+  walkForwardSplit: zod
+    .number()
+    .min(runTournamentStreamBodyWalkForwardSplitMin)
+    .max(runTournamentStreamBodyWalkForwardSplitMax)
+    .default(runTournamentStreamBodyWalkForwardSplitDefault),
+  walkForwardSplitDate: zod
+    .string()
+    .optional()
+    .describe(
+      "ISO date split (e.g. 2025-01-01 to train on 2024 \/ test on 2025+)",
+    ),
+  maxDrawdownFilterPct: zod
+    .number()
+    .default(runTournamentStreamBodyMaxDrawdownFilterPctDefault),
 });
 
 /**
@@ -957,6 +1358,16 @@ export const compareStrategiesBodyRequestsItemRiskTakerFeePctMax = 1;
 
 export const compareStrategiesBodyRequestsItemRiskSlippagePctMin = 0;
 export const compareStrategiesBodyRequestsItemRiskSlippagePctMax = 1;
+
+export const compareStrategiesBodyRequestsItemRiskRiskPerTradePctDefault = 100;
+export const compareStrategiesBodyRequestsItemRiskRiskPerTradePctMax = 100;
+
+export const compareStrategiesBodyRequestsItemRiskFundingRatePct8hDefault = 0.01;
+export const compareStrategiesBodyRequestsItemRiskFundingRatePct8hMin = 0;
+export const compareStrategiesBodyRequestsItemRiskFundingRatePct8hMax = 1;
+
+export const compareStrategiesBodyRequestsItemRiskMaxHoldingBarsDefault = 0;
+export const compareStrategiesBodyRequestsItemRiskMaxHoldingBarsMin = 0;
 
 export const compareStrategiesBodyRequestsItemWalkForwardSplitDefault = 0.7;
 export const compareStrategiesBodyRequestsItemWalkForwardSplitMin = 0.3;
@@ -1018,6 +1429,29 @@ export const CompareStrategiesBody = zod.object({
           .describe(
             "Slippage % applied to market orders (entries and SL exits)",
           ),
+        riskPerTradePct: zod
+          .number()
+          .min(1)
+          .max(compareStrategiesBodyRequestsItemRiskRiskPerTradePctMax)
+          .default(compareStrategiesBodyRequestsItemRiskRiskPerTradePctDefault)
+          .describe(
+            "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+          ),
+        fundingRatePct8h: zod
+          .number()
+          .min(compareStrategiesBodyRequestsItemRiskFundingRatePct8hMin)
+          .max(compareStrategiesBodyRequestsItemRiskFundingRatePct8hMax)
+          .default(compareStrategiesBodyRequestsItemRiskFundingRatePct8hDefault)
+          .describe(
+            "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+          ),
+        maxHoldingBars: zod
+          .number()
+          .min(compareStrategiesBodyRequestsItemRiskMaxHoldingBarsMin)
+          .default(compareStrategiesBodyRequestsItemRiskMaxHoldingBarsDefault)
+          .describe(
+            "Max bars a position may stay open before forced market close. 0 = disabled.",
+          ),
       }),
       walkForwardSplit: zod
         .number()
@@ -1063,6 +1497,16 @@ export const compareStrategiesResponseResultsItemRequestRiskTakerFeePctMax = 1;
 
 export const compareStrategiesResponseResultsItemRequestRiskSlippagePctMin = 0;
 export const compareStrategiesResponseResultsItemRequestRiskSlippagePctMax = 1;
+
+export const compareStrategiesResponseResultsItemRequestRiskRiskPerTradePctDefault = 100;
+export const compareStrategiesResponseResultsItemRequestRiskRiskPerTradePctMax = 100;
+
+export const compareStrategiesResponseResultsItemRequestRiskFundingRatePct8hDefault = 0.01;
+export const compareStrategiesResponseResultsItemRequestRiskFundingRatePct8hMin = 0;
+export const compareStrategiesResponseResultsItemRequestRiskFundingRatePct8hMax = 1;
+
+export const compareStrategiesResponseResultsItemRequestRiskMaxHoldingBarsDefault = 0;
+export const compareStrategiesResponseResultsItemRequestRiskMaxHoldingBarsMin = 0;
 
 export const compareStrategiesResponseResultsItemRequestWalkForwardSplitDefault = 0.7;
 export const compareStrategiesResponseResultsItemRequestWalkForwardSplitMin = 0.3;
@@ -1138,6 +1582,43 @@ export const CompareStrategiesResponse = zod.object({
             .describe(
               "Slippage % applied to market orders (entries and SL exits)",
             ),
+          riskPerTradePct: zod
+            .number()
+            .min(1)
+            .max(
+              compareStrategiesResponseResultsItemRequestRiskRiskPerTradePctMax,
+            )
+            .default(
+              compareStrategiesResponseResultsItemRequestRiskRiskPerTradePctDefault,
+            )
+            .describe(
+              "Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.",
+            ),
+          fundingRatePct8h: zod
+            .number()
+            .min(
+              compareStrategiesResponseResultsItemRequestRiskFundingRatePct8hMin,
+            )
+            .max(
+              compareStrategiesResponseResultsItemRequestRiskFundingRatePct8hMax,
+            )
+            .default(
+              compareStrategiesResponseResultsItemRequestRiskFundingRatePct8hDefault,
+            )
+            .describe(
+              "Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.",
+            ),
+          maxHoldingBars: zod
+            .number()
+            .min(
+              compareStrategiesResponseResultsItemRequestRiskMaxHoldingBarsMin,
+            )
+            .default(
+              compareStrategiesResponseResultsItemRequestRiskMaxHoldingBarsDefault,
+            )
+            .describe(
+              "Max bars a position may stay open before forced market close. 0 = disabled.",
+            ),
         }),
         walkForwardSplit: zod
           .number()
@@ -1171,6 +1652,11 @@ export const CompareStrategiesResponse = zod.object({
         avgLossPct: zod.number(),
         finalEquity: zod.number(),
         liquidations: zod.number(),
+        fundingPaid: zod
+          .number()
+          .describe(
+            "Total funding cost paid across all closed trades in this segment ($).",
+          ),
         verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
       }),
       walkForward: zod.object({
@@ -1190,6 +1676,11 @@ export const CompareStrategiesResponse = zod.object({
           avgLossPct: zod.number(),
           finalEquity: zod.number(),
           liquidations: zod.number(),
+          fundingPaid: zod
+            .number()
+            .describe(
+              "Total funding cost paid across all closed trades in this segment ($).",
+            ),
           verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
         }),
         outOfSample: zod.object({
@@ -1207,12 +1698,17 @@ export const CompareStrategiesResponse = zod.object({
           avgLossPct: zod.number(),
           finalEquity: zod.number(),
           liquidations: zod.number(),
+          fundingPaid: zod
+            .number()
+            .describe(
+              "Total funding cost paid across all closed trades in this segment ($).",
+            ),
           verdict: zod.enum(["excellent", "good", "mediocre", "poor", "blown"]),
         }),
         robustnessScore: zod
           .number()
           .describe(
-            "Ratio of OOS APY to IS APY (1.0 = no degradation, <0.5 = likely overfit)",
+            "Bounded 0–1 robustness — geometric mean of (a) OOS\/IS consistency\n(clamped 0..1 with 1.0 ≈ OOS APY ≥ IS APY) and (b) OOS absolute\nquality (normalized to a 200% APY ceiling). 0 = poor, 1 = excellent\nand consistent train-vs-test performance.\n",
           ),
       }),
       equityCurve: zod.array(
@@ -1234,12 +1730,18 @@ export const CompareStrategiesResponse = zod.object({
           pnl: zod.number(),
           pnlPct: zod.number(),
           feePaid: zod.number(),
+          fundingPaid: zod
+            .number()
+            .describe(
+              "Total funding paid for this position over its lifetime ($).",
+            ),
           exitReason: zod.enum([
             "stop_loss",
             "take_profit",
             "signal_exit",
             "end_of_data",
             "liquidation",
+            "time_stop",
           ]),
           sample: zod.enum(["in_sample", "out_of_sample"]),
         }),

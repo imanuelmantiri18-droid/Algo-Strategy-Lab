@@ -20,6 +20,8 @@ export interface Trade {
   pnl: number;
   pnlPct: number;
   feePaid: number;
+  /** Total funding paid for this position over its lifetime ($). */
+  fundingPaid: number;
   exitReason: TradeExitReason;
   sample: TradeSample;
 }

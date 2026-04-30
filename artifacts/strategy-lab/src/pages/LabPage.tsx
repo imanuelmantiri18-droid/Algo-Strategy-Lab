@@ -21,6 +21,7 @@ import { MetricsGrid } from "@/components/MetricsGrid";
 import { EquityChart } from "@/components/EquityChart";
 import { PriceChart } from "@/components/PriceChart";
 import { TradesTable } from "@/components/TradesTable";
+import { exportBacktestJson, exportTradesCsv } from "@/lib/exportResults";
 
 type Props = {
   config: LabConfig;
@@ -244,7 +245,7 @@ export function LabPage({
         {result ? (
           <>
             <Card>
-              <CardHeader className="py-3 px-4 flex-row items-center justify-between space-y-0">
+              <CardHeader className="py-3 px-4 flex-row items-center justify-between space-y-0 gap-2">
                 <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">
                   Results
                 </CardTitle>
@@ -258,6 +259,27 @@ export function LabPage({
                   <Badge variant="outline" className="font-mono text-[10px]">
                     1:{result.request.risk.riskRewardRatio}
                   </Badge>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => exportBacktestJson(result)}
+                    className="h-6 px-2 text-[10px] font-mono uppercase tracking-wider"
+                    title="Download full backtest result as JSON"
+                  >
+                    Export JSON
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => exportTradesCsv(result)}
+                    className="h-6 px-2 text-[10px] font-mono uppercase tracking-wider"
+                    title="Download trade log as CSV"
+                    disabled={result.trades.length === 0}
+                  >
+                    Export CSV
+                  </Button>
                 </div>
               </CardHeader>
               <CardContent className="px-4 pb-4 pt-0">

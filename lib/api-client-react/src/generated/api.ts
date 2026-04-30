@@ -543,6 +543,98 @@ export const useRunTournament = <
 };
 
 /**
+ * @summary Server-Sent Events stream of tournament results. Emits `status`,
+`started`, per-strategy `result` rows as they finish, throttled
+`progress` ticks, and a final `done` event with the full leaderboard.
+
+ */
+export const getRunTournamentStreamUrl = () => {
+  return `/api/backtest/tournament/stream`;
+};
+
+export const runTournamentStream = async (
+  tournamentRequest: TournamentRequest,
+  options?: RequestInit,
+): Promise<string> => {
+  return customFetch<string>(getRunTournamentStreamUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(tournamentRequest),
+  });
+};
+
+export const getRunTournamentStreamMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runTournamentStream>>,
+    TError,
+    { data: BodyType<TournamentRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runTournamentStream>>,
+  TError,
+  { data: BodyType<TournamentRequest> },
+  TContext
+> => {
+  const mutationKey = ["runTournamentStream"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runTournamentStream>>,
+    { data: BodyType<TournamentRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return runTournamentStream(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunTournamentStreamMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runTournamentStream>>
+>;
+export type RunTournamentStreamMutationBody = BodyType<TournamentRequest>;
+export type RunTournamentStreamMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Server-Sent Events stream of tournament results. Emits `status`,
+`started`, per-strategy `result` rows as they finish, throttled
+`progress` ticks, and a final `done` event with the full leaderboard.
+
+ */
+export const useRunTournamentStream = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runTournamentStream>>,
+    TError,
+    { data: BodyType<TournamentRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runTournamentStream>>,
+  TError,
+  { data: BodyType<TournamentRequest> },
+  TContext
+> => {
+  return useMutation(getRunTournamentStreamMutationOptions(options));
+};
+
+/**
  * @summary Compare multiple parameter sets head-to-head
  */
 export const getCompareStrategiesUrl = () => {

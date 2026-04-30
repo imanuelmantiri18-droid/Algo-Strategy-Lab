@@ -1,16 +1,15 @@
 import { useMemo, useState } from "react";
-import {
-  useRunTournament,
-  type TournamentRow,
-} from "@workspace/api-client-react";
+import { type TournamentRow } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Progress } from "@/components/ui/progress";
 import { LoadingPanel } from "@/components/LoadingPanel";
 import { LEVERAGE_PRESETS, type LabConfig } from "@/components/LabControls";
+import { useTournamentStream } from "@/hooks/useTournamentStream";
 import {
   formatPercent,
   formatNumber,
@@ -37,7 +36,7 @@ type Props = {
 type SortKey = "robustness" | "oosApy" | "oosReturn" | "isApy" | "sharpe" | "drawdown";
 
 export function TournamentPage({ baseConfig, onApply }: Props) {
-  const runM = useRunTournament();
+  const runM = useTournamentStream();
   const [splitDate, setSplitDate] = useState<string>(
     baseConfig.walkForwardSplitDate ?? "2025-01-01",
   );
@@ -53,19 +52,31 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
   const onRun = () => {
-    runM.mutate({
-      data: {
-        interval: interval as LabConfig["interval"],
-        lookbackDays,
-        initialCapital: baseConfig.initialCapital,
-        risk: { ...baseConfig.risk, leverage },
-        walkForwardSplitDate: splitDate,
-        maxDrawdownFilterPct: maxDD,
-      },
+    runM.start({
+      interval: interval as LabConfig["interval"],
+      lookbackDays,
+      initialCapital: baseConfig.initialCapital,
+      risk: { ...baseConfig.risk, leverage },
+      walkForwardSplitDate: splitDate,
+      maxDrawdownFilterPct: maxDD,
     });
   };
 
-  const result = runM.data;
+  // Prefer the final, fully-sorted result once the run completes; otherwise
+  // show whatever we've streamed in so far so the leaderboard fills live.
+  const result = runM.data
+    ? runM.data
+    : runM.liveRows.length > 0
+      ? {
+          rows: runM.liveRows,
+          best: undefined as TournamentRow | undefined,
+          totalStrategies: runM.progress?.total ?? runM.liveRows.length,
+          kept: runM.liveRows.filter((r) => !r.filtered).length,
+          dropped: runM.liveRows.filter((r) => r.filtered).length,
+          drawdownFilterPct: maxDD,
+          splitDate,
+        }
+      : null;
 
   const sortedRows = useMemo<TournamentRow[]>(() => {
     if (!result) return [];
@@ -185,7 +196,7 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
                 <span className="text-primary font-mono">{interval}</span>
               </label>
               <div className="grid grid-cols-5 gap-1">
-                {["15m", "1h", "4h", "1d", "1w"].map((tf) => (
+                {["15m", "1h", "2h", "4h", "1d"].map((tf) => (
                   <Button
                     key={tf}
                     type="button"
@@ -226,7 +237,8 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
                 onValueChange={(v) => setMaxDD(v[0] ?? 40)}
               />
               <div className="text-[10px] text-muted-foreground/70 font-mono">
-                Strategies with worse OOS drawdown are flagged as filtered.
+                Strategies whose worst drawdown — across either the in-sample
+                or out-of-sample window — exceeds this are flagged as filtered.
               </div>
             </div>
 
@@ -249,7 +261,7 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
 
       <div className="lg:col-span-8 space-y-3 order-1 lg:order-2 min-w-0">
         <LoadingPanel
-          active={runM.isPending}
+          active={runM.isPending && !runM.progress}
           title="Running tournament"
           subtitle={`${interval} · ${lookbackDays}d · ${leverage}× · split ${splitDate}`}
           steps={[
@@ -262,6 +274,44 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
             "Building leaderboard…",
           ]}
         />
+
+        {runM.isPending && runM.progress && runM.progress.total > 0 ? (
+          <Card className="border-primary/40">
+            <CardContent className="p-3 sm:p-4 space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
+                <span>{runM.status ?? "Working…"}</span>
+                <span className="text-primary">
+                  {runM.progress.done} / {runM.progress.total}
+                </span>
+              </div>
+              <Progress
+                value={(runM.progress.done / runM.progress.total) * 100}
+                className="h-1.5"
+              />
+              <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground/80">
+                <span>
+                  {runM.progress.rate > 0
+                    ? `${runM.progress.rate.toFixed(2)} strat/s`
+                    : "warming up…"}
+                </span>
+                <span>
+                  {runM.progress.etaMs > 0
+                    ? `eta ${Math.max(1, Math.round(runM.progress.etaMs / 1000))}s`
+                    : "—"}
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full font-mono uppercase tracking-wider text-[10px] h-7"
+                onClick={runM.cancel}
+              >
+                Cancel
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {runM.isError ? (
           <Card className="border-destructive/50">

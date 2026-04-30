@@ -140,6 +140,23 @@ export interface RiskConfig {
    * @maximum 1
    */
   slippagePct: number;
+  /**
+   * Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.
+   * @minimum 1
+   * @maximum 100
+   */
+  riskPerTradePct: number;
+  /**
+   * Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.
+   * @minimum 0
+   * @maximum 1
+   */
+  fundingRatePct8h: number;
+  /**
+   * Max bars a position may stay open before forced market close. 0 = disabled.
+   * @minimum 0
+   */
+  maxHoldingBars: number;
 }
 
 export type BacktestRequestParams = { [key: string]: number };
@@ -188,6 +205,7 @@ export const TradeExitReason = {
   signal_exit: "signal_exit",
   end_of_data: "end_of_data",
   liquidation: "liquidation",
+  time_stop: "time_stop",
 } as const;
 
 export type TradeSample = (typeof TradeSample)[keyof typeof TradeSample];
@@ -208,6 +226,8 @@ export interface Trade {
   pnl: number;
   pnlPct: number;
   feePaid: number;
+  /** Total funding paid for this position over its lifetime ($). */
+  fundingPaid: number;
   exitReason: TradeExitReason;
   sample: TradeSample;
 }
@@ -238,6 +258,8 @@ export interface BacktestMetrics {
   avgLossPct: number;
   finalEquity: number;
   liquidations: number;
+  /** Total funding cost paid across all closed trades in this segment ($). */
+  fundingPaid: number;
   verdict: BacktestMetricsVerdict;
 }
 
@@ -245,7 +267,11 @@ export interface WalkForwardSummary {
   splitDate: string;
   inSample: BacktestMetrics;
   outOfSample: BacktestMetrics;
-  /** Ratio of OOS APY to IS APY (1.0 = no degradation, <0.5 = likely overfit) */
+  /** Bounded 0–1 robustness — geometric mean of (a) OOS/IS consistency
+(clamped 0..1 with 1.0 ≈ OOS APY ≥ IS APY) and (b) OOS absolute
+quality (normalized to a 200% APY ceiling). 0 = poor, 1 = excellent
+and consistent train-vs-test performance.
+ */
   robustnessScore: number;
 }
 

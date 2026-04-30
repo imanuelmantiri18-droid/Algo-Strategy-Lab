@@ -49,4 +49,21 @@ export interface RiskConfig {
    * @maximum 1
    */
   slippagePct: number;
+  /**
+   * Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.
+   * @minimum 1
+   * @maximum 100
+   */
+  riskPerTradePct: number;
+  /**
+   * Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.
+   * @minimum 0
+   * @maximum 1
+   */
+  fundingRatePct8h: number;
+  /**
+   * Max bars a position may stay open before forced market close. 0 = disabled.
+   * @minimum 0
+   */
+  maxHoldingBars: number;
 }

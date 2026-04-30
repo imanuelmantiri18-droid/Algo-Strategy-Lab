@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,6 +8,9 @@ import { OptimizerPage } from "@/pages/OptimizerPage";
 import { ComparePage } from "@/pages/ComparePage";
 import { TournamentPage } from "@/pages/TournamentPage";
 import { DEFAULT_CONFIG, type LabConfig } from "@/components/LabControls";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+
+const LAST_STRATEGY_KEY = "strategyLab.lastStrategyId";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,7 +27,25 @@ function Shell() {
   const [tab, setTab] = useState<TabKey>("lab");
   const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
   const [paramValues, setParamValues] = useState<Record<string, number>>({});
-  const [selectedStrategyId, setSelectedStrategyId] = useState<string>("");
+  const [selectedStrategyId, setSelectedStrategyId] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.localStorage.getItem(LAST_STRATEGY_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+
+  // Persist the user's most recent strategy choice across reloads (FIX 8).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (selectedStrategyId)
+        window.localStorage.setItem(LAST_STRATEGY_KEY, selectedStrategyId);
+    } catch {
+      // ignore quota / privacy-mode failures
+    }
+  }, [selectedStrategyId]);
 
   return (
     <div className="min-h-screen w-full text-foreground">
@@ -116,11 +137,13 @@ function Shell() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Shell />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Shell />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

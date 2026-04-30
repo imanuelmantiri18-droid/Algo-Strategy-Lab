@@ -19,6 +19,9 @@ export type RiskValues = {
   makerFeePct: number;
   takerFeePct: number;
   slippagePct: number;
+  riskPerTradePct: number;
+  fundingRatePct8h: number;
+  maxHoldingBars: number;
 };
 
 export type LabConfig = {
@@ -39,6 +42,9 @@ export const DEFAULT_RISK: RiskValues = {
   makerFeePct: 0.01,
   takerFeePct: 0.035,
   slippagePct: 0.05,
+  riskPerTradePct: 100,
+  fundingRatePct8h: 0.01,
+  maxHoldingBars: 0,
 };
 
 export const DEFAULT_CONFIG: LabConfig = {
@@ -263,6 +269,40 @@ export function LabControls({
           onChange={(n) => setRisk({ slippagePct: n })}
         />
       </div>
+
+      <Separator />
+
+      <SliderRow
+        label="Risk per Trade"
+        value={config.risk.riskPerTradePct}
+        min={5}
+        max={100}
+        step={5}
+        suffix="%"
+        hint="Fraction of equity used as margin on each entry. 100% = legacy all-in."
+        onChange={(n) => setRisk({ riskPerTradePct: n })}
+      />
+
+      <SliderRow
+        label="Funding Rate (per 8h)"
+        value={config.risk.fundingRatePct8h}
+        min={0}
+        max={0.1}
+        step={0.005}
+        suffix="%"
+        hint="Perpetual funding cost charged every 8h while in a position."
+        onChange={(n) => setRisk({ fundingRatePct8h: n })}
+      />
+
+      <SliderRow
+        label="Max Holding Bars"
+        value={config.risk.maxHoldingBars}
+        min={0}
+        max={500}
+        step={5}
+        hint="Force-close trades open for this many bars (0 = disabled)."
+        onChange={(n) => setRisk({ maxHoldingBars: Math.round(n) })}
+      />
 
       <Separator />
 

@@ -11,6 +11,10 @@ export interface WalkForwardSummary {
   splitDate: string;
   inSample: BacktestMetrics;
   outOfSample: BacktestMetrics;
-  /** Ratio of OOS APY to IS APY (1.0 = no degradation, <0.5 = likely overfit) */
+  /** Bounded 0–1 robustness — geometric mean of (a) OOS/IS consistency
+(clamped 0..1 with 1.0 ≈ OOS APY ≥ IS APY) and (b) OOS absolute
+quality (normalized to a 200% APY ceiling). 0 = poor, 1 = excellent
+and consistent train-vs-test performance.
+ */
   robustnessScore: number;
 }

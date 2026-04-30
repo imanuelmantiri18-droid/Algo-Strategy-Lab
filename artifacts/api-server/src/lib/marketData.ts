@@ -8,7 +8,15 @@ import { logger } from "./logger";
 const BINANCE_BASE = "https://data-api.binance.vision/api/v3/klines";
 const SYMBOL = "BTCUSDT";
 const PER_REQUEST_LIMIT = 1000;
-const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+const SHORT_CACHE_TTL_MS = 5 * 60_000; // 5 minutes — recent windows
+const LONG_CACHE_TTL_MS = 15 * 60_000; // 15 minutes — historical >365d windows
+const LONG_LOOKBACK_THRESHOLD_DAYS = 365;
+
+function cacheTtlFor(lookbackDays: number): number {
+  return lookbackDays > LONG_LOOKBACK_THRESHOLD_DAYS
+    ? LONG_CACHE_TTL_MS
+    : SHORT_CACHE_TTL_MS;
+}
 
 type CacheEntry = {
   candles: Candle[];
@@ -119,7 +127,7 @@ export async function getBtcHistory(
   const now = Date.now();
 
   const cached = cache.get(key);
-  if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
+  if (cached && now - cached.fetchedAt < cacheTtlFor(lookbackDays)) {
     return cached.candles;
   }
 

@@ -15,4 +15,5 @@ export const TradeExitReason = {
   signal_exit: "signal_exit",
   end_of_data: "end_of_data",
   liquidation: "liquidation",
+  time_stop: "time_stop",
 } as const;

@@ -126,6 +126,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TournamentResult"
+  /backtest/tournament/stream:
+    post:
+      operationId: runTournamentStream
+      tags: [backtest]
+      summary: |
+        Server-Sent Events stream of tournament results. Emits `status`,
+        `started`, per-strategy `result` rows as they finish, throttled
+        `progress` ticks, and a final `done` event with the full leaderboard.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TournamentRequest"
+      responses:
+        "200":
+          description: text/event-stream of tournament events
+          content:
+            text/event-stream:
+              schema:
+                type: string
   /backtest/compare:
     post:
       operationId: compareStrategies
@@ -234,6 +255,9 @@ components:
         - makerFeePct
         - takerFeePct
         - slippagePct
+        - riskPerTradePct
+        - fundingRatePct8h
+        - maxHoldingBars
       properties:
         leverage:
           type: number
@@ -270,6 +294,23 @@ components:
           minimum: 0
           maximum: 1
           description: Slippage % applied to market orders (entries and SL exits)
+        riskPerTradePct:
+          type: number
+          minimum: 1
+          maximum: 100
+          default: 100
+          description: Fraction of equity (1–100%) committed as margin per trade. 100 = legacy all-in behavior.
+        fundingRatePct8h:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0.01
+          description: Perpetual funding rate per 8h in % (typical 0.01). Deducted from equity proportional to time-in-position.
+        maxHoldingBars:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Max bars a position may stay open before forced market close. 0 = disabled.
 
     BacktestRequest:
       type: object
@@ -329,6 +370,7 @@ components:
         - pnl
         - pnlPct
         - feePaid
+        - fundingPaid
         - exitReason
         - sample
       properties:
@@ -344,9 +386,18 @@ components:
         pnl: { type: number }
         pnlPct: { type: number }
         feePaid: { type: number }
+        fundingPaid:
+          type: number
+          description: Total funding paid for this position over its lifetime ($).
         exitReason:
           type: string
-          enum: [stop_loss, take_profit, signal_exit, end_of_data, liquidation]
+          enum:
+            - stop_loss
+            - take_profit
+            - signal_exit
+            - end_of_data
+            - liquidation
+            - time_stop
         sample:
           type: string
           enum: [in_sample, out_of_sample]
@@ -368,6 +419,7 @@ components:
         - avgLossPct
         - finalEquity
         - liquidations
+        - fundingPaid
         - verdict
       properties:
         totalReturnPct: { type: number }
@@ -384,6 +436,9 @@ components:
         avgLossPct: { type: number }
         finalEquity: { type: number }
         liquidations: { type: integer }
+        fundingPaid:
+          type: number
+          description: Total funding cost paid across all closed trades in this segment ($).
         verdict:
           type: string
           enum: [excellent, good, mediocre, poor, blown]
@@ -399,7 +454,11 @@ components:
           $ref: "#/components/schemas/BacktestMetrics"
         robustnessScore:
           type: number
-          description: Ratio of OOS APY to IS APY (1.0 = no degradation, <0.5 = likely overfit)
+          description: |
+            Bounded 0–1 robustness — geometric mean of (a) OOS/IS consistency
+            (clamped 0..1 with 1.0 ≈ OOS APY ≥ IS APY) and (b) OOS absolute
+            quality (normalized to a 200% APY ceiling). 0 = poor, 1 = excellent
+            and consistent train-vs-test performance.
 
     BacktestResult:
       type: object

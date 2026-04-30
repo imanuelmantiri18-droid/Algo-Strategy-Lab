@@ -22,5 +22,7 @@ export interface BacktestMetrics {
   avgLossPct: number;
   finalEquity: number;
   liquidations: number;
+  /** Total funding cost paid across all closed trades in this segment ($). */
+  fundingPaid: number;
   verdict: BacktestMetricsVerdict;
 }
