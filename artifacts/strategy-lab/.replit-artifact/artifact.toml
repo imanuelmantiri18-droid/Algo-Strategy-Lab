@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Algo Strategy Lab"
+version = "1.0.0"
+id = "artifacts/strategy-lab"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23651
+
+[services.development]
+run = "pnpm --filter @workspace/strategy-lab run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/strategy-lab", "run", "build" ]
+publicDir = "artifacts/strategy-lab/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23651"
+BASE_PATH = "/"

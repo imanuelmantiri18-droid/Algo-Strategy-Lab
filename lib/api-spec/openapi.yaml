@@ -3,20 +3,25 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Algo trading strategy lab API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: market
+    description: Market data
+  - name: strategies
+    description: Strategy catalog
+  - name: backtest
+    description: Backtest operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +29,345 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /market/btc:
+    get:
+      operationId: getBtcData
+      tags: [market]
+      summary: Get historical BTC OHLC data
+      parameters:
+        - in: query
+          name: days
+          schema:
+            type: integer
+            default: 365
+            minimum: 30
+            maximum: 1825
+      responses:
+        "200":
+          description: BTC price series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketSeries"
+  /strategies:
+    get:
+      operationId: listStrategies
+      tags: [strategies]
+      summary: List available strategies
+      responses:
+        "200":
+          description: Strategy catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [strategies]
+                properties:
+                  strategies:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StrategyMeta"
+  /backtest/run:
+    post:
+      operationId: runBacktest
+      tags: [backtest]
+      summary: Run a backtest with chosen strategy and parameters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BacktestRequest"
+      responses:
+        "200":
+          description: Full backtest result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestResult"
+  /backtest/optimize:
+    post:
+      operationId: runOptimization
+      tags: [backtest]
+      summary: Grid-search optimization across leverage and SL/TP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OptimizeRequest"
+      responses:
+        "200":
+          description: Optimization results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OptimizeResult"
+  /backtest/compare:
+    post:
+      operationId: compareStrategies
+      tags: [backtest]
+      summary: Compare multiple strategies head-to-head
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompareRequest"
+      responses:
+        "200":
+          description: Comparison results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompareResult"
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
         status:
           type: string
-      required:
-        - status
 
+    Candle:
+      type: object
+      required: [t, o, h, l, c]
+      properties:
+        t:
+          type: string
+          description: ISO date
+        o: { type: number }
+        h: { type: number }
+        l: { type: number }
+        c: { type: number }
+
+    MarketSeries:
+      type: object
+      required: [symbol, candles]
+      properties:
+        symbol: { type: string }
+        candles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Candle"
+
+    StrategyParam:
+      type: object
+      required: [key, label, type, default, min, max, step]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        type:
+          type: string
+          enum: [number]
+        default: { type: number }
+        min: { type: number }
+        max: { type: number }
+        step: { type: number }
+        description: { type: string }
+
+    StrategyMeta:
+      type: object
+      required: [id, name, tagline, description, category, risk, params]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        tagline: { type: string }
+        description: { type: string }
+        category:
+          type: string
+          enum: [trend, mean_reversion, breakout, momentum, moonshot]
+        risk:
+          type: string
+          enum: [low, medium, high, extreme]
+        params:
+          type: array
+          items:
+            $ref: "#/components/schemas/StrategyParam"
+
+    BacktestRequest:
+      type: object
+      required: [strategyId, params, leverage, stopLossPct, takeProfitPct, days, initialCapital]
+      properties:
+        strategyId: { type: string }
+        params:
+          type: object
+          additionalProperties:
+            type: number
+        leverage:
+          type: number
+          minimum: 1
+          maximum: 50
+        stopLossPct:
+          type: number
+          minimum: 0.1
+          maximum: 50
+          description: Stop loss percentage relative to entry price (before leverage)
+        takeProfitPct:
+          type: number
+          minimum: 0.1
+          maximum: 200
+          description: Take profit percentage relative to entry price (before leverage)
+        days:
+          type: integer
+          minimum: 30
+          maximum: 1825
+        initialCapital:
+          type: number
+          minimum: 100
+        feePct:
+          type: number
+          default: 0.06
+          description: Per-side fee percentage (e.g. 0.06 = 0.06%)
+
+    EquityPoint:
+      type: object
+      required: [t, equity, drawdown]
+      properties:
+        t: { type: string }
+        equity: { type: number }
+        drawdown: { type: number }
+
+    Trade:
+      type: object
+      required: [entryTime, exitTime, side, entryPrice, exitPrice, pnl, pnlPct, exitReason]
+      properties:
+        entryTime: { type: string }
+        exitTime: { type: string }
+        side:
+          type: string
+          enum: [long, short]
+        entryPrice: { type: number }
+        exitPrice: { type: number }
+        pnl: { type: number }
+        pnlPct: { type: number }
+        exitReason:
+          type: string
+          enum: [stop_loss, take_profit, signal_exit, end_of_data, liquidation]
+
+    BacktestMetrics:
+      type: object
+      required:
+        - totalReturnPct
+        - annualReturnPct
+        - maxDrawdownPct
+        - sharpe
+        - sortino
+        - winRate
+        - profitFactor
+        - trades
+        - wins
+        - losses
+        - avgWinPct
+        - avgLossPct
+        - finalEquity
+        - liquidations
+        - verdict
+      properties:
+        totalReturnPct: { type: number }
+        annualReturnPct: { type: number }
+        maxDrawdownPct: { type: number }
+        sharpe: { type: number }
+        sortino: { type: number }
+        winRate: { type: number }
+        profitFactor: { type: number }
+        trades: { type: integer }
+        wins: { type: integer }
+        losses: { type: integer }
+        avgWinPct: { type: number }
+        avgLossPct: { type: number }
+        finalEquity: { type: number }
+        liquidations: { type: integer }
+        verdict:
+          type: string
+          enum: [excellent, good, mediocre, poor, blown]
+
+    BacktestResult:
+      type: object
+      required: [strategyId, request, metrics, equityCurve, trades, candles]
+      properties:
+        strategyId: { type: string }
+        request:
+          $ref: "#/components/schemas/BacktestRequest"
+        metrics:
+          $ref: "#/components/schemas/BacktestMetrics"
+        equityCurve:
+          type: array
+          items:
+            $ref: "#/components/schemas/EquityPoint"
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
+        candles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Candle"
+
+    OptimizeRequest:
+      type: object
+      required: [strategyId, params, days, initialCapital, leverageGrid, stopLossGrid, takeProfitGrid]
+      properties:
+        strategyId: { type: string }
+        params:
+          type: object
+          additionalProperties:
+            type: number
+        days:
+          type: integer
+          minimum: 30
+          maximum: 1825
+        initialCapital:
+          type: number
+        feePct:
+          type: number
+        leverageGrid:
+          type: array
+          items: { type: number }
+        stopLossGrid:
+          type: array
+          items: { type: number }
+        takeProfitGrid:
+          type: array
+          items: { type: number }
+
+    OptimizeRow:
+      type: object
+      required: [leverage, stopLossPct, takeProfitPct, metrics]
+      properties:
+        leverage: { type: number }
+        stopLossPct: { type: number }
+        takeProfitPct: { type: number }
+        metrics:
+          $ref: "#/components/schemas/BacktestMetrics"
+
+    OptimizeResult:
+      type: object
+      required: [strategyId, rows, best]
+      properties:
+        strategyId: { type: string }
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/OptimizeRow"
+        best:
+          $ref: "#/components/schemas/OptimizeRow"
+
+    CompareRequest:
+      type: object
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/BacktestRequest"
+
+    CompareResult:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/BacktestResult"
