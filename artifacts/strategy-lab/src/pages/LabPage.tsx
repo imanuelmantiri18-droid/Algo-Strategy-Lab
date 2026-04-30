@@ -18,6 +18,7 @@ import { MetricsGrid } from "@/components/MetricsGrid";
 import { EquityChart } from "@/components/EquityChart";
 import { TradesSummary } from "@/components/TradesSummary";
 import { TradesTable } from "@/components/TradesTable";
+import { MonthlyReturnsHeatmap } from "@/components/MonthlyReturnsHeatmap";
 
 type Props = {
   config: LabConfig;
@@ -237,6 +238,11 @@ export function LabPage({
                 />
               </CardContent>
             </Card>
+
+            <MonthlyReturnsHeatmap
+              equityCurve={result.equityCurve}
+              splitDate={result.walkForward.splitDate}
+            />
 
             <TradesSummary trades={result.trades} />
 
