@@ -1,38 +1,36 @@
 import type { Candle, Signal, StrategyDef } from "../types/strategy";
 
-function ema(values: number[], period: number): number[] {
+export function ema(values: Float64Array, period: number): Float64Array {
+  const out = new Float64Array(values.length);
+  if (values.length === 0) return out;
   const k = 2 / (period + 1);
-  const out: number[] = [];
-  let prev = values[0] ?? 0;
-  for (let i = 0; i < values.length; i++) {
-    const v = values[i] ?? 0;
-    if (i === 0) {
-      out.push(v);
-      prev = v;
-    } else {
-      const next = v * k + prev * (1 - k);
-      out.push(next);
-      prev = next;
-    }
+  let prev = values[0]!;
+  out[0] = prev;
+  for (let i = 1; i < values.length; i++) {
+    const v = values[i]!;
+    prev = v * k + prev * (1 - k);
+    out[i] = prev;
   }
   return out;
 }
 
-function rsi(values: number[], period: number): number[] {
-  const out: number[] = new Array(values.length).fill(50);
-  if (values.length < period + 1) return out;
+export function rsi(values: Float64Array, period: number): Float64Array {
+  const n = values.length;
+  const out = new Float64Array(n);
+  out.fill(50);
+  if (n < period + 1) return out;
   let gain = 0;
   let loss = 0;
   for (let i = 1; i <= period; i++) {
-    const diff = (values[i] ?? 0) - (values[i - 1] ?? 0);
+    const diff = values[i]! - values[i - 1]!;
     if (diff >= 0) gain += diff;
     else loss -= diff;
   }
   let avgGain = gain / period;
   let avgLoss = loss / period;
   out[period] = 100 - 100 / (1 + (avgLoss === 0 ? 100 : avgGain / avgLoss));
-  for (let i = period + 1; i < values.length; i++) {
-    const diff = (values[i] ?? 0) - (values[i - 1] ?? 0);
+  for (let i = period + 1; i < n; i++) {
+    const diff = values[i]! - values[i - 1]!;
     const g = diff > 0 ? diff : 0;
     const l = diff < 0 ? -diff : 0;
     avgGain = (avgGain * (period - 1) + g) / period;
@@ -43,139 +41,74 @@ function rsi(values: number[], period: number): number[] {
   return out;
 }
 
-const closes = (candles: Candle[]): number[] => candles.map((c) => c.c);
+export function atr(
+  highs: Float64Array,
+  lows: Float64Array,
+  closes: Float64Array,
+  period: number,
+): Float64Array {
+  const n = highs.length;
+  const out = new Float64Array(n);
+  if (n === 0) return out;
+  const tr = new Float64Array(n);
+  tr[0] = highs[0]! - lows[0]!;
+  for (let i = 1; i < n; i++) {
+    const h = highs[i]!;
+    const l = lows[i]!;
+    const pc = closes[i - 1]!;
+    tr[i] = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+  }
+  // Wilder smoothing
+  let acc = 0;
+  for (let i = 0; i < period && i < n; i++) acc += tr[i]!;
+  out[period - 1] = acc / period;
+  for (let i = period; i < n; i++) {
+    out[i] = (out[i - 1]! * (period - 1) + tr[i]!) / period;
+  }
+  return out;
+}
+
+function closes(candles: Candle[]): Float64Array {
+  const out = new Float64Array(candles.length);
+  for (let i = 0; i < candles.length; i++) out[i] = candles[i]!.c;
+  return out;
+}
+
+function highs(candles: Candle[]): Float64Array {
+  const out = new Float64Array(candles.length);
+  for (let i = 0; i < candles.length; i++) out[i] = candles[i]!.h;
+  return out;
+}
+
+function lows(candles: Candle[]): Float64Array {
+  const out = new Float64Array(candles.length);
+  for (let i = 0; i < candles.length; i++) out[i] = candles[i]!.l;
+  return out;
+}
 
 export const STRATEGIES: StrategyDef[] = [
   {
-    id: "ema_cross",
-    name: "EMA Crossover",
-    tagline: "Classic trend follower riding fast/slow EMAs.",
+    id: "momentum_trend_cross",
+    name: "Momentum Trend Crossover",
+    tagline: "EMA crossover gated by RSI momentum filter.",
     description:
-      "Goes long when the fast EMA crosses above the slow EMA, exits when it crosses back. Smooth, lazy, trend-friendly.",
+      "Long when fast EMA crosses above slow EMA AND RSI(14) > threshold (momentum confirms uptrend). Short when fast EMA crosses below slow EMA AND RSI(14) < (100 - threshold). Pairs with ATR-based stops and an R:R take-profit.",
     category: "trend",
-    risk: "medium",
-    params: [
-      { key: "fast", label: "Fast EMA", type: "number", default: 12, min: 3, max: 50, step: 1 },
-      { key: "slow", label: "Slow EMA", type: "number", default: 30, min: 10, max: 200, step: 1 },
-    ],
-    generateSignals(candles, params) {
-      const c = closes(candles);
-      const fast = ema(c, Math.max(2, Math.round(params.fast ?? 12)));
-      const slow = ema(c, Math.max(3, Math.round(params.slow ?? 30)));
-      const out: Signal[] = new Array(candles.length).fill(0);
-      for (let i = 1; i < candles.length; i++) {
-        out[i] = (fast[i] ?? 0) > (slow[i] ?? 0) ? 1 : -1;
-      }
-      return out;
-    },
-  },
-  {
-    id: "rsi_revert",
-    name: "RSI Mean Reversion",
-    tagline: "Buys fear, sells greed.",
-    description:
-      "Long when RSI dips below the oversold threshold; flat (or short) when RSI spikes above overbought.",
-    category: "mean_reversion",
-    risk: "medium",
-    params: [
-      { key: "period", label: "RSI Period", type: "number", default: 14, min: 5, max: 50, step: 1 },
-      { key: "oversold", label: "Oversold", type: "number", default: 30, min: 5, max: 45, step: 1 },
-      { key: "overbought", label: "Overbought", type: "number", default: 70, min: 55, max: 95, step: 1 },
-    ],
-    generateSignals(candles, params) {
-      const c = closes(candles);
-      const r = rsi(c, Math.max(3, Math.round(params.period ?? 14)));
-      const oversold = params.oversold ?? 30;
-      const overbought = params.overbought ?? 70;
-      const out: Signal[] = new Array(candles.length).fill(0);
-      let pos: Signal = 0;
-      for (let i = 1; i < candles.length; i++) {
-        const v = r[i] ?? 50;
-        if (v < oversold) pos = 1;
-        else if (v > overbought) pos = -1;
-        out[i] = pos;
-      }
-      return out;
-    },
-  },
-  {
-    id: "breakout",
-    name: "Donchian Breakout",
-    tagline: "Buys new highs, sells new lows.",
-    description:
-      "Long when price breaks above the N-day high; short when it breaks below the N-day low. Classic turtle-style.",
-    category: "breakout",
     risk: "high",
     params: [
-      { key: "lookback", label: "Channel Length", type: "number", default: 20, min: 5, max: 100, step: 1 },
-    ],
-    generateSignals(candles, params) {
-      const lb = Math.max(2, Math.round(params.lookback ?? 20));
-      const out: Signal[] = new Array(candles.length).fill(0);
-      let pos: Signal = 0;
-      for (let i = lb; i < candles.length; i++) {
-        let hi = -Infinity;
-        let lo = Infinity;
-        for (let j = i - lb; j < i; j++) {
-          hi = Math.max(hi, candles[j]?.h ?? -Infinity);
-          lo = Math.min(lo, candles[j]?.l ?? Infinity);
-        }
-        const cur = candles[i]?.c ?? 0;
-        if (cur > hi) pos = 1;
-        else if (cur < lo) pos = -1;
-        out[i] = pos;
-      }
-      return out;
-    },
-  },
-  {
-    id: "momentum",
-    name: "N-Day Momentum",
-    tagline: "Trade in the direction of recent returns.",
-    description:
-      "Long when the last N-day return is positive, short when negative. Pure trend persistence bet.",
-    category: "momentum",
-    risk: "medium",
-    params: [
-      { key: "lookback", label: "Lookback (days)", type: "number", default: 10, min: 2, max: 60, step: 1 },
+      { key: "emaFast", label: "EMA Fast", type: "number", default: 20, min: 5, max: 100, step: 1 },
+      { key: "emaSlow", label: "EMA Slow", type: "number", default: 50, min: 20, max: 400, step: 1 },
+      { key: "rsiPeriod", label: "RSI Period", type: "number", default: 14, min: 5, max: 50, step: 1 },
       {
-        key: "threshold",
-        label: "Min |Return| %",
+        key: "rsiThreshold",
+        label: "RSI Threshold",
         type: "number",
-        default: 1.5,
-        min: 0,
-        max: 20,
-        step: 0.1,
-        description: "Skip flat markets below this absolute return",
+        default: 50,
+        min: 30,
+        max: 70,
+        step: 1,
+        description: "Long requires RSI > threshold; short requires RSI < (100 - threshold)",
       },
-    ],
-    generateSignals(candles, params) {
-      const lb = Math.max(2, Math.round(params.lookback ?? 10));
-      const thr = (params.threshold ?? 1.5) / 100;
-      const out: Signal[] = new Array(candles.length).fill(0);
-      for (let i = lb; i < candles.length; i++) {
-        const past = candles[i - lb]?.c ?? candles[i]?.c ?? 1;
-        const cur = candles[i]?.c ?? past;
-        const ret = cur / past - 1;
-        if (ret > thr) out[i] = 1;
-        else if (ret < -thr) out[i] = -1;
-        else out[i] = out[i - 1] ?? 0;
-      }
-      return out;
-    },
-  },
-  {
-    id: "moonshot",
-    name: "Moonshot",
-    tagline: "High-leverage trend-rider chasing 1000% APY.",
-    description:
-      "Combines a fast trend filter (EMA20 vs EMA50) with momentum confirmation. Designed to be paired with high leverage and a tight stop / wide take-profit. Extreme risk: full account loss possible.",
-    category: "moonshot",
-    risk: "extreme",
-    params: [
-      { key: "fast", label: "Fast EMA", type: "number", default: 8, min: 3, max: 30, step: 1 },
-      { key: "slow", label: "Slow EMA", type: "number", default: 21, min: 10, max: 80, step: 1 },
-      { key: "momLookback", label: "Momentum Lookback", type: "number", default: 5, min: 2, max: 30, step: 1 },
       {
         key: "allowShort",
         label: "Allow Shorts (1=yes 0=no)",
@@ -188,18 +121,28 @@ export const STRATEGIES: StrategyDef[] = [
     ],
     generateSignals(candles, params) {
       const c = closes(candles);
-      const fast = ema(c, Math.max(2, Math.round(params.fast ?? 8)));
-      const slow = ema(c, Math.max(3, Math.round(params.slow ?? 21)));
-      const mLb = Math.max(2, Math.round(params.momLookback ?? 5));
+      const fastP = Math.max(2, Math.round(params.emaFast ?? 20));
+      const slowP = Math.max(fastP + 1, Math.round(params.emaSlow ?? 50));
+      const rsiP = Math.max(3, Math.round(params.rsiPeriod ?? 14));
+      const thr = params.rsiThreshold ?? 50;
       const allowShort = (params.allowShort ?? 1) > 0.5;
+      const fast = ema(c, fastP);
+      const slow = ema(c, slowP);
+      const r = rsi(c, rsiP);
       const out: Signal[] = new Array(candles.length).fill(0);
-      for (let i = mLb; i < candles.length; i++) {
-        const trendUp = (fast[i] ?? 0) > (slow[i] ?? 0);
-        const past = c[i - mLb] ?? c[i] ?? 1;
-        const mom = (c[i] ?? past) / past - 1;
-        if (trendUp && mom > 0) out[i] = 1;
-        else if (!trendUp && mom < 0 && allowShort) out[i] = -1;
-        else out[i] = 0;
+      let pos: Signal = 0;
+      for (let i = 1; i < candles.length; i++) {
+        const fPrev = fast[i - 1]!;
+        const sPrev = slow[i - 1]!;
+        const f = fast[i]!;
+        const s = slow[i]!;
+        const rsiNow = r[i]!;
+        const crossUp = fPrev <= sPrev && f > s;
+        const crossDn = fPrev >= sPrev && f < s;
+        if (crossUp && rsiNow > thr) pos = 1;
+        else if (crossDn && rsiNow < 100 - thr && allowShort) pos = -1;
+        else if (crossUp || crossDn) pos = 0;
+        out[i] = pos;
       }
       return out;
     },
@@ -213,3 +156,5 @@ export function getStrategy(id: string): StrategyDef | undefined {
 export function strategyMetaList() {
   return STRATEGIES.map(({ generateSignals: _g, ...meta }) => meta);
 }
+
+export { closes as closesArr, highs as highsArr, lows as lowsArr };

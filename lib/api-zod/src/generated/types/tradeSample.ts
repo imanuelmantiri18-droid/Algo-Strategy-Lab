@@ -5,8 +5,10 @@
  * Algo trading strategy lab API (real BTC/USDT data, momentum trend crossover)
  * OpenAPI spec version: 0.2.0
  */
-import type { StrategyMeta } from "./strategyMeta";
 
-export type ListStrategies200 = {
-  strategies: StrategyMeta[];
-};
+export type TradeSample = (typeof TradeSample)[keyof typeof TradeSample];
+
+export const TradeSample = {
+  in_sample: "in_sample",
+  out_of_sample: "out_of_sample",
+} as const;

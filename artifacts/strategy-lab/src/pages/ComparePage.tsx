@@ -19,7 +19,15 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingPanel } from "@/components/LoadingPanel";
 import { EquityChart } from "@/components/EquityChart";
-import { formatDollar, formatNumber, formatPercent, getVerdictColor } from "@/lib/format";
+import { DEFAULT_RISK } from "@/components/LabControls";
+import {
+  formatDollar,
+  formatNumber,
+  formatPercent,
+  getVerdictColor,
+  INTERVAL_OPTIONS,
+  type IntervalValue,
+} from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const COLORS = [
@@ -31,68 +39,98 @@ const COLORS = [
 
 type Slot = {
   label: string;
-  strategyId: string;
+  emaFast: number;
+  emaSlow: number;
+  rsiThreshold: number;
   leverage: number;
-  stopLossPct: number;
-  takeProfitPct: number;
+  atrMultiplierSL: number;
+  riskRewardRatio: number;
 };
 
 const DEFAULT_SLOTS: Slot[] = [
   {
-    label: "Conservative trend",
-    strategyId: "ema_cross",
-    leverage: 2,
-    stopLossPct: 5,
-    takeProfitPct: 15,
+    label: "Conservative",
+    emaFast: 20,
+    emaSlow: 100,
+    rsiThreshold: 50,
+    leverage: 5,
+    atrMultiplierSL: 2,
+    riskRewardRatio: 3,
   },
   {
-    label: "Balanced revert",
-    strategyId: "rsi_revert",
-    leverage: 3,
-    stopLossPct: 4,
-    takeProfitPct: 8,
+    label: "Balanced",
+    emaFast: 20,
+    emaSlow: 50,
+    rsiThreshold: 50,
+    leverage: 10,
+    atrMultiplierSL: 1.5,
+    riskRewardRatio: 2,
   },
   {
-    label: "Moonshot 100x dream",
-    strategyId: "moonshot",
-    leverage: 25,
-    stopLossPct: 2,
-    takeProfitPct: 40,
+    label: "Aggressive 20×",
+    emaFast: 10,
+    emaSlow: 50,
+    rsiThreshold: 50,
+    leverage: 20,
+    atrMultiplierSL: 1.0,
+    riskRewardRatio: 2,
   },
 ];
 
-export function ComparePage() {
+type Props = {
+  interval: IntervalValue;
+  lookbackDays: number;
+  initialCapital: number;
+};
+
+export function ComparePage({
+  interval: initialInterval,
+  lookbackDays: initialDays,
+  initialCapital: initialCap,
+}: Props) {
   const stratsQ = useListStrategies();
   const strategies: StrategyMeta[] = stratsQ.data?.strategies ?? [];
+  const strategy = strategies[0];
+
+  const [interval, setInterval] = useState<IntervalValue>(initialInterval);
+  const [lookbackDays, setLookbackDays] = useState(initialDays);
+  const [capital, setCapital] = useState(initialCap);
   const [slots, setSlots] = useState<Slot[]>(DEFAULT_SLOTS);
-  const [days, setDays] = useState(730);
-  const [capital, setCapital] = useState(10_000);
   const compareM = useCompareStrategies();
   const result = compareM.data;
 
   useEffect(() => {
-    if (strategies.length > 0 && !slots.every((s) => strategies.find((x) => x.id === s.strategyId))) {
-      setSlots(DEFAULT_SLOTS);
-    }
-  }, [strategies.length]);
+    setInterval(initialInterval);
+    setLookbackDays(initialDays);
+    setCapital(initialCap);
+  }, [initialInterval, initialDays, initialCap]);
 
   const onRun = () => {
-    const requests: BacktestRequest[] = slots.map((s) => {
-      const strat = strategies.find((x) => x.id === s.strategyId);
-      const params: Record<string, number> = {};
-      if (strat) for (const p of strat.params) params[p.key] = p.default;
-      return {
-        strategyId: s.strategyId,
-        params,
+    if (!strategy) return;
+    const baseParams: Record<string, number> = {};
+    for (const p of strategy.params) baseParams[p.key] = p.default;
+    const requests: BacktestRequest[] = slots.map((s) => ({
+      strategyId: strategy.id,
+      params: {
+        ...baseParams,
+        emaFast: s.emaFast,
+        emaSlow: s.emaSlow,
+        rsiThreshold: s.rsiThreshold,
+      },
+      interval,
+      lookbackDays,
+      initialCapital: capital,
+      walkForwardSplit: 0.7,
+      risk: {
+        ...DEFAULT_RISK,
         leverage: s.leverage,
-        stopLossPct: s.stopLossPct,
-        takeProfitPct: s.takeProfitPct,
-        days,
-        initialCapital: capital,
-        feePct: 0.06,
-      };
+        atrMultiplierSL: s.atrMultiplierSL,
+        riskRewardRatio: s.riskRewardRatio,
+      },
+    }));
+    compareM.mutate({
+      data: { requests, labels: slots.map((s) => s.label) },
     });
-    compareM.mutate({ data: { requests } });
   };
 
   const updateSlot = (idx: number, patch: Partial<Slot>) => {
@@ -105,19 +143,72 @@ export function ComparePage() {
       ...s,
       {
         label: `Preset ${s.length + 1}`,
-        strategyId: strategies[0]?.id ?? "ema_cross",
-        leverage: 5,
-        stopLossPct: 4,
-        takeProfitPct: 12,
+        emaFast: 20,
+        emaSlow: 50,
+        rsiThreshold: 50,
+        leverage: 10,
+        atrMultiplierSL: 1.5,
+        riskRewardRatio: 2,
       },
     ]);
   };
 
-  const removeSlot = (idx: number) => setSlots((s) => s.filter((_, i) => i !== idx));
+  const removeSlot = (idx: number) =>
+    setSlots((s) => s.filter((_, i) => i !== idx));
+
+  const labels = result?.labels ?? slots.map((s) => s.label);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4">
       <div className="lg:col-span-5 space-y-3 order-2 lg:order-1">
+        <Card>
+          <CardHeader className="py-3 px-4">
+            <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">
+              Shared Market
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 pt-0 space-y-3">
+            <div>
+              <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                Timeframe
+              </label>
+              <Select
+                value={interval}
+                onValueChange={(v) => setInterval(v as IntervalValue)}
+              >
+                <SelectTrigger className="h-8 mt-1 font-mono text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {INTERVAL_OPTIONS.map((opt) => (
+                    <SelectItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="font-mono text-xs"
+                    >
+                      {opt.value} · {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Mini
+                label="Lookback (d)"
+                value={lookbackDays}
+                onChange={(v) =>
+                  setLookbackDays(Math.max(30, Math.min(1825, v)))
+                }
+              />
+              <Mini
+                label="Capital ($)"
+                value={capital}
+                onChange={(v) => setCapital(Math.max(100, v))}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="py-3 px-4 flex-row items-center justify-between space-y-0">
             <CardTitle className="text-sm font-mono uppercase tracking-wider text-muted-foreground">
@@ -138,7 +229,9 @@ export function ComparePage() {
               <div
                 key={i}
                 className="rounded-lg border border-card-border bg-card/40 p-3 space-y-2"
-                style={{ boxShadow: `inset 3px 0 0 ${COLORS[i] ?? "hsl(152 90% 48%)"}` }}
+                style={{
+                  boxShadow: `inset 3px 0 0 ${COLORS[i] ?? "hsl(152 90% 48%)"}`,
+                }}
               >
                 <div className="flex items-center justify-between gap-2">
                   <Input
@@ -157,21 +250,23 @@ export function ComparePage() {
                     </Button>
                   ) : null}
                 </div>
-                <Select
-                  value={slot.strategyId}
-                  onValueChange={(v) => updateSlot(i, { strategyId: v })}
-                >
-                  <SelectTrigger className="h-8 text-xs font-mono">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {strategies.map((s) => (
-                      <SelectItem key={s.id} value={s.id} className="text-xs font-mono">
-                        {s.name} ({s.risk})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="grid grid-cols-3 gap-2">
+                  <Mini
+                    label="EMA fast"
+                    value={slot.emaFast}
+                    onChange={(v) => updateSlot(i, { emaFast: v })}
+                  />
+                  <Mini
+                    label="EMA slow"
+                    value={slot.emaSlow}
+                    onChange={(v) => updateSlot(i, { emaSlow: v })}
+                  />
+                  <Mini
+                    label="RSI thr."
+                    value={slot.rsiThreshold}
+                    onChange={(v) => updateSlot(i, { rsiThreshold: v })}
+                  />
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   <Mini
                     label="Lev"
@@ -179,29 +274,22 @@ export function ComparePage() {
                     onChange={(v) => updateSlot(i, { leverage: v })}
                   />
                   <Mini
-                    label="SL %"
-                    value={slot.stopLossPct}
-                    onChange={(v) => updateSlot(i, { stopLossPct: v })}
+                    label="ATR×"
+                    value={slot.atrMultiplierSL}
+                    step={0.1}
+                    onChange={(v) => updateSlot(i, { atrMultiplierSL: v })}
                   />
                   <Mini
-                    label="TP %"
-                    value={slot.takeProfitPct}
-                    onChange={(v) => updateSlot(i, { takeProfitPct: v })}
+                    label="R:R"
+                    value={slot.riskRewardRatio}
+                    step={0.25}
+                    onChange={(v) => updateSlot(i, { riskRewardRatio: v })}
                   />
                 </div>
               </div>
             ))}
 
             <Separator />
-
-            <div className="grid grid-cols-2 gap-2">
-              <Mini label="Days" value={days} onChange={(v) => setDays(Math.max(60, v))} />
-              <Mini
-                label="Capital ($)"
-                value={capital}
-                onChange={(v) => setCapital(Math.max(100, v))}
-              />
-            </div>
 
             <Button
               onClick={onRun}
@@ -218,20 +306,23 @@ export function ComparePage() {
       <div className="lg:col-span-7 space-y-3 order-1 lg:order-2 min-w-0">
         <LoadingPanel
           active={compareM.isPending}
-          title="Comparing strategies"
-          subtitle={`${slots.length} presets · ${days} days`}
+          title="Comparing presets"
+          subtitle={`${slots.length} presets · ${interval} · ${lookbackDays}d`}
           steps={[
-            "Allocating workers per preset…",
-            "Running backtests in parallel…",
-            "Computing metrics…",
-            "Aligning equity curves…",
+            `Fetching real BTC/USDT ${interval} klines from Binance…`,
+            `Caching ${lookbackDays} days of price history…`,
+            "Pre-computing indicators (EMA / RSI / ATR)…",
+            "Running each preset through walk-forward engine…",
+            "Aligning equity curves on shared timeline…",
+            "Building comparison metrics…",
           ]}
         />
 
         {compareM.isError ? (
           <Card className="border-destructive/50">
             <CardContent className="p-4 text-sm text-red-300">
-              Comparison failed: {(compareM.error as Error)?.message ?? "unknown error"}
+              Comparison failed:{" "}
+              {(compareM.error as Error)?.message ?? "unknown error"}
             </CardContent>
           </Card>
         ) : null}
@@ -243,7 +334,8 @@ export function ComparePage() {
                 Awaiting Comparison
               </div>
               <div className="mt-2 text-base sm:text-lg">
-                Tweak presets and run them head-to-head on the same BTC history.
+                Tweak EMA, RSI, leverage and risk settings — then run them
+                head-to-head on the same BTC history.
               </div>
             </CardContent>
           </Card>
@@ -260,7 +352,7 @@ export function ComparePage() {
               <CardContent className="px-2 sm:px-4 pb-4 pt-0">
                 <EquityChart
                   series={result.results.map((r, i) => ({
-                    name: slots[i]?.label ?? r.strategyId,
+                    name: labels[i] ?? r.strategyId,
                     color: COLORS[i] ?? "hsl(152 90% 48%)",
                     data: r.equityCurve,
                   }))}
@@ -279,7 +371,7 @@ export function ComparePage() {
                 <EquityChart
                   variant="drawdown"
                   series={result.results.map((r, i) => ({
-                    name: slots[i]?.label ?? r.strategyId,
+                    name: labels[i] ?? r.strategyId,
                     color: COLORS[i] ?? "hsl(152 90% 48%)",
                     data: r.equityCurve,
                   }))}
@@ -296,7 +388,7 @@ export function ComparePage() {
               </CardHeader>
               <CardContent className="px-2 sm:px-4 pb-4 pt-0">
                 <div className="rounded-lg border border-card-border bg-card/60 overflow-hidden overflow-x-auto">
-                  <table className="w-full text-xs sm:text-sm font-mono min-w-[640px]">
+                  <table className="w-full text-xs sm:text-sm font-mono min-w-[760px]">
                     <thead>
                       <tr className="text-left text-muted-foreground">
                         <th className="px-2 sm:px-3 py-2 font-normal">Preset</th>
@@ -307,6 +399,7 @@ export function ComparePage() {
                         <th className="px-2 sm:px-3 py-2 font-normal text-right">Sharpe</th>
                         <th className="px-2 sm:px-3 py-2 font-normal text-right">Win%</th>
                         <th className="px-2 sm:px-3 py-2 font-normal text-right">Trades</th>
+                        <th className="px-2 sm:px-3 py-2 font-normal text-right">Robust</th>
                         <th className="px-2 sm:px-3 py-2 font-normal text-right">Verdict</th>
                       </tr>
                     </thead>
@@ -316,14 +409,18 @@ export function ComparePage() {
                           <td className="px-2 sm:px-3 py-1.5">
                             <span
                               className="inline-block w-2 h-2 rounded-full mr-2 align-middle"
-                              style={{ background: COLORS[i] ?? "hsl(152 90% 48%)" }}
+                              style={{
+                                background: COLORS[i] ?? "hsl(152 90% 48%)",
+                              }}
                             />
-                            {slots[i]?.label ?? r.strategyId}
+                            {labels[i] ?? r.strategyId}
                           </td>
                           <td
                             className={cn(
                               "px-2 sm:px-3 py-1.5 text-right",
-                              r.metrics.annualReturnPct >= 0 ? "text-emerald-300" : "text-red-300",
+                              r.metrics.annualReturnPct >= 0
+                                ? "text-emerald-300"
+                                : "text-red-300",
                             )}
                           >
                             {formatPercent(r.metrics.annualReturnPct)}
@@ -343,7 +440,12 @@ export function ComparePage() {
                           <td className="px-2 sm:px-3 py-1.5 text-right">
                             {formatNumber(r.metrics.winRate, 0)}%
                           </td>
-                          <td className="px-2 sm:px-3 py-1.5 text-right">{r.metrics.trades}</td>
+                          <td className="px-2 sm:px-3 py-1.5 text-right">
+                            {r.metrics.trades}
+                          </td>
+                          <td className="px-2 sm:px-3 py-1.5 text-right">
+                            {formatNumber(r.walkForward.robustnessScore, 2)}
+                          </td>
                           <td className="px-2 sm:px-3 py-1.5 text-right">
                             <Badge
                               variant="outline"
@@ -372,10 +474,12 @@ export function ComparePage() {
 function Mini({
   label,
   value,
+  step,
   onChange,
 }: {
   label: string;
   value: number;
+  step?: number;
   onChange: (n: number) => void;
 }) {
   return (
@@ -386,6 +490,7 @@ function Mini({
       <Input
         type="number"
         value={value}
+        step={step}
         onChange={(e) => {
           const n = Number(e.target.value);
           if (!Number.isNaN(n)) onChange(n);

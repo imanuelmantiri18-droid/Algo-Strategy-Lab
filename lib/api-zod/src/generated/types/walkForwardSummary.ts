@@ -6,15 +6,11 @@
  * OpenAPI spec version: 0.2.0
  */
 import type { BacktestMetrics } from "./backtestMetrics";
-import type { OptimizeRowParams } from "./optimizeRowParams";
-import type { RiskConfig } from "./riskConfig";
 
-export interface OptimizeRow {
-  params: OptimizeRowParams;
-  risk: RiskConfig;
+export interface WalkForwardSummary {
+  splitDate: string;
   inSample: BacktestMetrics;
   outOfSample: BacktestMetrics;
+  /** Ratio of OOS APY to IS APY (1.0 = no degradation, <0.5 = likely overfit) */
   robustnessScore: number;
-  /** True if dropped by drawdown filter */
-  filtered: boolean;
 }

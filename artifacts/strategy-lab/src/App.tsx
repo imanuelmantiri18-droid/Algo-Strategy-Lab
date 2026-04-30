@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LabPage } from "@/pages/LabPage";
 import { OptimizerPage } from "@/pages/OptimizerPage";
 import { ComparePage } from "@/pages/ComparePage";
+import { DEFAULT_CONFIG, type LabConfig } from "@/components/LabControls";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,7 +21,8 @@ type TabKey = "lab" | "optimizer" | "compare";
 
 function Shell() {
   const [tab, setTab] = useState<TabKey>("lab");
-  const [selectedStrategyId, setSelectedStrategyId] = useState<string>("moonshot");
+  const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
+  const [paramValues, setParamValues] = useState<Record<string, number>>({});
 
   return (
     <div className="min-h-screen w-full text-foreground">
@@ -35,13 +37,13 @@ function Shell() {
                 Strategy Lab
               </div>
               <div className="text-[10px] sm:text-xs text-muted-foreground font-mono leading-tight truncate">
-                Leveraged backtests · BTC · 5y synthetic
+                Real BTC/USDT · Binance · Walk-forward backtests
               </div>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2">
             <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-              v0.1
+              v0.2
             </span>
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
             <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-primary">
@@ -60,29 +62,36 @@ function Shell() {
           </TabsList>
           <TabsContent value="lab" className="mt-0">
             <LabPage
-              selectedId={selectedStrategyId}
-              onSelect={setSelectedStrategyId}
+              config={config}
+              onConfigChange={setConfig}
+              paramValues={paramValues}
+              onParamsChange={setParamValues}
             />
           </TabsContent>
           <TabsContent value="optimizer" className="mt-0">
             <OptimizerPage
-              selectedId={selectedStrategyId}
-              onSelect={setSelectedStrategyId}
-              onApplyBest={({ strategyId }) => {
-                setSelectedStrategyId(strategyId);
+              interval={config.interval}
+              lookbackDays={config.lookbackDays}
+              initialCapital={config.initialCapital}
+              onApplyBest={({ params, risk }) => {
+                setParamValues(params);
+                setConfig((c) => ({ ...c, risk: { ...c.risk, ...risk } }));
                 setTab("lab");
               }}
             />
           </TabsContent>
           <TabsContent value="compare" className="mt-0">
-            <ComparePage />
+            <ComparePage
+              interval={config.interval}
+              lookbackDays={config.lookbackDays}
+              initialCapital={config.initialCapital}
+            />
           </TabsContent>
         </Tabs>
       </main>
 
       <footer className="mx-auto max-w-7xl px-3 sm:px-6 py-6 text-[10px] sm:text-xs text-muted-foreground/80 font-mono leading-relaxed">
-        Synthetic BTC history · Linear-leverage model · Per-side fee 0.06% · Liquidation buffer 5%.
-        Past performance of synthetic backtests does not guarantee future results. For research only.
+        Real BTC/USDT klines from Binance public API · Maker {DEFAULT_CONFIG.risk.makerFeePct}% / Taker {DEFAULT_CONFIG.risk.takerFeePct}% fees · {DEFAULT_CONFIG.risk.slippagePct}% slippage on market orders · ATR-based stops with R:R take-profit · Walk-forward in-sample / out-of-sample validation. Past performance does not guarantee future results. For research only.
       </footer>
 
       <Toaster />

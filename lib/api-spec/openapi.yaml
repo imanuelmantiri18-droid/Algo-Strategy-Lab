@@ -2,8 +2,8 @@ openapi: 3.1.0
 info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.1.0
-  description: Algo trading strategy lab API
+  version: 0.2.0
+  description: Algo trading strategy lab API (real BTC/USDT data, momentum trend crossover)
 servers:
   - url: /api
     description: Base API path
@@ -33,14 +33,19 @@ paths:
     get:
       operationId: getBtcData
       tags: [market]
-      summary: Get historical BTC OHLC data
+      summary: Get historical BTC/USDT OHLC data from Binance
       parameters:
         - in: query
-          name: days
+          name: interval
+          required: true
+          schema:
+            $ref: "#/components/schemas/Interval"
+        - in: query
+          name: lookbackDays
           schema:
             type: integer
             default: 365
-            minimum: 30
+            minimum: 7
             maximum: 1825
       responses:
         "200":
@@ -71,7 +76,7 @@ paths:
     post:
       operationId: runBacktest
       tags: [backtest]
-      summary: Run a backtest with chosen strategy and parameters
+      summary: Run a single backtest with walk-forward validation
       requestBody:
         required: true
         content:
@@ -89,7 +94,7 @@ paths:
     post:
       operationId: runOptimization
       tags: [backtest]
-      summary: Grid-search optimization across leverage and SL/TP
+      summary: Grid-search optimization across strategy + risk parameters with walk-forward
       requestBody:
         required: true
         content:
@@ -107,7 +112,7 @@ paths:
     post:
       operationId: compareStrategies
       tags: [backtest]
-      summary: Compare multiple strategies head-to-head
+      summary: Compare multiple parameter sets head-to-head
       requestBody:
         required: true
         content:
@@ -130,23 +135,32 @@ components:
         status:
           type: string
 
+    Interval:
+      type: string
+      enum: ["5m", "15m", "30m", "1h", "2h", "4h", "1d"]
+      description: Candle timeframe
+
     Candle:
       type: object
-      required: [t, o, h, l, c]
+      required: [t, o, h, l, c, v]
       properties:
         t:
           type: string
-          description: ISO date
+          description: ISO datetime (UTC)
         o: { type: number }
         h: { type: number }
         l: { type: number }
         c: { type: number }
+        v: { type: number, description: Volume in base asset }
 
     MarketSeries:
       type: object
-      required: [symbol, candles]
+      required: [symbol, interval, candles, source]
       properties:
         symbol: { type: string }
+        interval:
+          $ref: "#/components/schemas/Interval"
+        source: { type: string, description: e.g. "binance" }
         candles:
           type: array
           items:
@@ -186,40 +200,86 @@ components:
           items:
             $ref: "#/components/schemas/StrategyParam"
 
+    RiskConfig:
+      type: object
+      required:
+        - leverage
+        - atrPeriod
+        - atrMultiplierSL
+        - riskRewardRatio
+        - makerFeePct
+        - takerFeePct
+        - slippagePct
+      properties:
+        leverage:
+          type: number
+          minimum: 1
+          maximum: 50
+          description: Linear leverage (10-20 recommended)
+        atrPeriod:
+          type: integer
+          minimum: 5
+          maximum: 50
+          description: Period for ATR calculation (default 14)
+        atrMultiplierSL:
+          type: number
+          minimum: 0.25
+          maximum: 5
+          description: SL distance = ATR × this multiplier
+        riskRewardRatio:
+          type: number
+          minimum: 0.5
+          maximum: 10
+          description: TP distance = SL distance × this ratio
+        makerFeePct:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Maker fee % (e.g. 0.01 = 0.01% for limit fills like TP)
+        takerFeePct:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Taker fee % (e.g. 0.035 = 0.035% for market entries and SL)
+        slippagePct:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Slippage % applied to market orders (entries and SL exits)
+
     BacktestRequest:
       type: object
-      required: [strategyId, params, leverage, stopLossPct, takeProfitPct, days, initialCapital]
+      required:
+        - strategyId
+        - params
+        - interval
+        - lookbackDays
+        - initialCapital
+        - risk
       properties:
         strategyId: { type: string }
         params:
           type: object
           additionalProperties:
             type: number
-        leverage:
-          type: number
-          minimum: 1
-          maximum: 50
-        stopLossPct:
-          type: number
-          minimum: 0.1
-          maximum: 50
-          description: Stop loss percentage relative to entry price (before leverage)
-        takeProfitPct:
-          type: number
-          minimum: 0.1
-          maximum: 200
-          description: Take profit percentage relative to entry price (before leverage)
-        days:
+        interval:
+          $ref: "#/components/schemas/Interval"
+        lookbackDays:
           type: integer
-          minimum: 30
+          minimum: 7
           maximum: 1825
         initialCapital:
           type: number
           minimum: 100
-        feePct:
+          default: 1000
+        risk:
+          $ref: "#/components/schemas/RiskConfig"
+        walkForwardSplit:
           type: number
-          default: 0.06
-          description: Per-side fee percentage (e.g. 0.06 = 0.06%)
+          minimum: 0.3
+          maximum: 0.9
+          default: 0.7
+          description: Fraction used for in-sample (rest is out-of-sample)
 
     EquityPoint:
       type: object
@@ -231,7 +291,19 @@ components:
 
     Trade:
       type: object
-      required: [entryTime, exitTime, side, entryPrice, exitPrice, pnl, pnlPct, exitReason]
+      required:
+        - entryTime
+        - exitTime
+        - side
+        - entryPrice
+        - exitPrice
+        - stopPrice
+        - takeProfitPrice
+        - pnl
+        - pnlPct
+        - feePaid
+        - exitReason
+        - sample
       properties:
         entryTime: { type: string }
         exitTime: { type: string }
@@ -240,11 +312,17 @@ components:
           enum: [long, short]
         entryPrice: { type: number }
         exitPrice: { type: number }
+        stopPrice: { type: number }
+        takeProfitPrice: { type: number }
         pnl: { type: number }
         pnlPct: { type: number }
+        feePaid: { type: number }
         exitReason:
           type: string
           enum: [stop_loss, take_profit, signal_exit, end_of_data, liquidation]
+        sample:
+          type: string
+          enum: [in_sample, out_of_sample]
 
     BacktestMetrics:
       type: object
@@ -283,15 +361,37 @@ components:
           type: string
           enum: [excellent, good, mediocre, poor, blown]
 
+    WalkForwardSummary:
+      type: object
+      required: [splitDate, inSample, outOfSample, robustnessScore]
+      properties:
+        splitDate: { type: string }
+        inSample:
+          $ref: "#/components/schemas/BacktestMetrics"
+        outOfSample:
+          $ref: "#/components/schemas/BacktestMetrics"
+        robustnessScore:
+          type: number
+          description: Ratio of OOS APY to IS APY (1.0 = no degradation, <0.5 = likely overfit)
+
     BacktestResult:
       type: object
-      required: [strategyId, request, metrics, equityCurve, trades, candles]
+      required:
+        - strategyId
+        - request
+        - metrics
+        - walkForward
+        - equityCurve
+        - trades
+        - candles
       properties:
         strategyId: { type: string }
         request:
           $ref: "#/components/schemas/BacktestRequest"
         metrics:
           $ref: "#/components/schemas/BacktestMetrics"
+        walkForward:
+          $ref: "#/components/schemas/WalkForwardSummary"
         equityCurve:
           type: array
           items:
@@ -305,46 +405,98 @@ components:
           items:
             $ref: "#/components/schemas/Candle"
 
+    GridAxis:
+      type: object
+      required: [key, values]
+      properties:
+        key:
+          type: string
+          description: Parameter key — strategy param key, or one of "leverage", "atrMultiplierSL", "riskRewardRatio"
+        values:
+          type: array
+          items: { type: number }
+
     OptimizeRequest:
       type: object
-      required: [strategyId, params, days, initialCapital, leverageGrid, stopLossGrid, takeProfitGrid]
+      required:
+        - strategyId
+        - baseParams
+        - interval
+        - lookbackDays
+        - initialCapital
+        - baseRisk
+        - axes
       properties:
         strategyId: { type: string }
+        baseParams:
+          type: object
+          additionalProperties:
+            type: number
+          description: Default strategy params; axes override these per-combo
+        interval:
+          $ref: "#/components/schemas/Interval"
+        lookbackDays:
+          type: integer
+          minimum: 7
+          maximum: 1825
+        initialCapital:
+          type: number
+        baseRisk:
+          $ref: "#/components/schemas/RiskConfig"
+        axes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GridAxis"
+        walkForwardSplit:
+          type: number
+          minimum: 0.3
+          maximum: 0.9
+          default: 0.7
+        maxDrawdownFilterPct:
+          type: number
+          default: 40
+          description: Drop combos whose IS max drawdown exceeds this %
+        maxCombos:
+          type: integer
+          default: 10000
+          maximum: 10000
+
+    OptimizeRow:
+      type: object
+      required:
+        - params
+        - risk
+        - inSample
+        - outOfSample
+        - robustnessScore
+        - filtered
+      properties:
         params:
           type: object
           additionalProperties:
             type: number
-        days:
-          type: integer
-          minimum: 30
-          maximum: 1825
-        initialCapital:
-          type: number
-        feePct:
-          type: number
-        leverageGrid:
-          type: array
-          items: { type: number }
-        stopLossGrid:
-          type: array
-          items: { type: number }
-        takeProfitGrid:
-          type: array
-          items: { type: number }
-
-    OptimizeRow:
-      type: object
-      required: [leverage, stopLossPct, takeProfitPct, metrics]
-      properties:
-        leverage: { type: number }
-        stopLossPct: { type: number }
-        takeProfitPct: { type: number }
-        metrics:
+        risk:
+          $ref: "#/components/schemas/RiskConfig"
+        inSample:
           $ref: "#/components/schemas/BacktestMetrics"
+        outOfSample:
+          $ref: "#/components/schemas/BacktestMetrics"
+        robustnessScore:
+          type: number
+        filtered:
+          type: boolean
+          description: True if dropped by drawdown filter
 
     OptimizeResult:
       type: object
-      required: [strategyId, rows, best]
+      required:
+        - strategyId
+        - rows
+        - best
+        - totalCombos
+        - kept
+        - dropped
+        - drawdownFilterPct
       properties:
         strategyId: { type: string }
         rows:
@@ -353,21 +505,31 @@ components:
             $ref: "#/components/schemas/OptimizeRow"
         best:
           $ref: "#/components/schemas/OptimizeRow"
+        totalCombos: { type: integer }
+        kept: { type: integer }
+        dropped: { type: integer }
+        drawdownFilterPct: { type: number }
 
     CompareRequest:
       type: object
-      required: [requests]
+      required: [requests, labels]
       properties:
         requests:
           type: array
           items:
             $ref: "#/components/schemas/BacktestRequest"
+        labels:
+          type: array
+          items: { type: string }
 
     CompareResult:
       type: object
-      required: [results]
+      required: [results, labels]
       properties:
         results:
           type: array
           items:
             $ref: "#/components/schemas/BacktestResult"
+        labels:
+          type: array
+          items: { type: string }
