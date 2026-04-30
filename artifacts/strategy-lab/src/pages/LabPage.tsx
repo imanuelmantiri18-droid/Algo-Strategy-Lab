@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   useListStrategies,
   useRunBacktest,
@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { StrategyPicker } from "@/components/StrategyPicker";
 import {
-  FIXED_CONFIG_SUMMARY,
+  deriveConfigSummary,
   type LabConfig,
 } from "@/components/LabControls";
 import { LoadingPanel } from "@/components/LoadingPanel";
@@ -38,6 +38,7 @@ export function LabPage({
   const stratsQ = useListStrategies();
   const strategies: StrategyMeta[] = stratsQ.data?.strategies ?? [];
   const availableStrategies = strategies.filter((s) => s.available !== false);
+  const summary = useMemo(() => deriveConfigSummary(config), [config]);
   const strategy: StrategyMeta | undefined =
     strategies.find((s) => s.id === selectedStrategyId) ?? availableStrategies[0];
   const runM = useRunBacktest();
@@ -135,10 +136,10 @@ export function LabPage({
             </div>
             <Separator />
             <div className="text-[10px] font-mono text-muted-foreground/80 leading-snug">
-              <span className="text-muted-foreground uppercase tracking-wider">Fixed config:</span>{" "}
-              {FIXED_CONFIG_SUMMARY.periodLabel} · {FIXED_CONFIG_SUMMARY.intervalLabel} ·{" "}
-              {FIXED_CONFIG_SUMMARY.splitLabel} · {FIXED_CONFIG_SUMMARY.riskLabel} ·{" "}
-              {FIXED_CONFIG_SUMMARY.capitalLabel}
+              <span className="text-muted-foreground uppercase tracking-wider">Active config:</span>{" "}
+              {summary.periodLabel} · {summary.intervalLabel} ·{" "}
+              {summary.splitLabel} · {summary.riskLabel} ·{" "}
+              {summary.capitalLabel}
             </div>
           </CardContent>
         </Card>
@@ -146,7 +147,7 @@ export function LabPage({
         <LoadingPanel
           active={isLoading}
           title={`Backtesting ${strategy?.name ?? "strategy"}`}
-          subtitle={`${FIXED_CONFIG_SUMMARY.intervalLabel} · ${FIXED_CONFIG_SUMMARY.periodLabel}`}
+          subtitle={`${summary.intervalLabel} · ${summary.periodLabel}`}
           steps={[
             "Fetching real BTC/USDT klines from Binance…",
             "Computing indicators…",

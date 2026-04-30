@@ -5,7 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { LoadingPanel } from "@/components/LoadingPanel";
-import { FIXED_CONFIG_SUMMARY, type LabConfig } from "@/components/LabControls";
+import {
+  FIXED_CONFIG_SUMMARY,
+  deriveConfigSummary,
+  type LabConfig,
+} from "@/components/LabControls";
 import { useTournamentStream } from "@/hooks/useTournamentStream";
 import {
   formatPercent,
@@ -32,6 +36,7 @@ type Props = {
 
 export function TournamentPage({ baseConfig, onApply }: Props) {
   const runM = useTournamentStream();
+  const summary = useMemo(() => deriveConfigSummary(baseConfig), [baseConfig]);
 
   const onRun = () => {
     runM.start({
@@ -86,7 +91,7 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
               Find the best algorithm on BTC since 2022
             </div>
             <div className="text-[11px] text-muted-foreground font-mono leading-snug">
-              {FIXED_CONFIG_SUMMARY.periodLabel} · {FIXED_CONFIG_SUMMARY.intervalLabel} · {FIXED_CONFIG_SUMMARY.splitLabel} · {FIXED_CONFIG_SUMMARY.riskLabel} · DD filter ≤ {FIXED_CONFIG_SUMMARY.ddFilterPct}%
+              {summary.periodLabel} · {summary.intervalLabel} · {summary.splitLabel} · {summary.riskLabel} · DD filter ≤ {summary.ddFilterPct}%
             </div>
           </div>
           <Button

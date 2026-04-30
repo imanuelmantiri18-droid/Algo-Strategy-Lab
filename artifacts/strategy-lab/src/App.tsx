@@ -1,14 +1,45 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LabPage } from "@/pages/LabPage";
 import { TournamentPage } from "@/pages/TournamentPage";
-import { DEFAULT_CONFIG, FIXED_CONFIG_SUMMARY, type LabConfig } from "@/components/LabControls";
+import {
+  DEFAULT_CONFIG,
+  FIXED_CONFIG_SUMMARY,
+  deriveConfigSummary,
+  type LabConfig,
+} from "@/components/LabControls";
+import { ConfigBar } from "@/components/ConfigBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const LAST_STRATEGY_KEY = "strategyLab.lastStrategyId";
+const CONFIG_KEY = "strategyLab.config.v1";
+
+function loadStoredConfig(): LabConfig {
+  if (typeof window === "undefined") return DEFAULT_CONFIG;
+  try {
+    const raw = window.localStorage.getItem(CONFIG_KEY);
+    if (!raw) return DEFAULT_CONFIG;
+    const parsed = JSON.parse(raw) as Partial<LabConfig> & {
+      risk?: Partial<LabConfig["risk"]>;
+    };
+    // Only allow the three editable fields to override defaults.
+    return {
+      ...DEFAULT_CONFIG,
+      interval: parsed.interval ?? DEFAULT_CONFIG.interval,
+      risk: {
+        ...DEFAULT_CONFIG.risk,
+        leverage: parsed.risk?.leverage ?? DEFAULT_CONFIG.risk.leverage,
+        riskPerTradePct:
+          parsed.risk?.riskPerTradePct ?? DEFAULT_CONFIG.risk.riskPerTradePct,
+      },
+    };
+  } catch {
+    return DEFAULT_CONFIG;
+  }
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -23,8 +54,38 @@ type TabKey = "lab" | "tournament";
 
 function Shell() {
   const [tab, setTab] = useState<TabKey>("tournament");
-  const [config] = useState<LabConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<LabConfig>(loadStoredConfig);
   const [paramValues, setParamValues] = useState<Record<string, number>>({});
+
+  // Persist editable config so it survives reloads.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        CONFIG_KEY,
+        JSON.stringify({
+          interval: config.interval,
+          risk: {
+            leverage: config.risk.leverage,
+            riskPerTradePct: config.risk.riskPerTradePct,
+          },
+        }),
+      );
+    } catch {
+      // ignore
+    }
+  }, [config]);
+
+  const isDefaultConfig = useMemo(
+    () =>
+      config.interval === DEFAULT_CONFIG.interval &&
+      config.risk.leverage === DEFAULT_CONFIG.risk.leverage &&
+      config.risk.riskPerTradePct === DEFAULT_CONFIG.risk.riskPerTradePct,
+    [config],
+  );
+
+  const summary = useMemo(() => deriveConfigSummary(config), [config]);
+  const headerSubtitle = `BTC/USDT · ${summary.intervalLabel} · ${config.risk.leverage}× · ${config.risk.riskPerTradePct}% risk`;
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     try {
@@ -57,7 +118,7 @@ function Shell() {
                 Strategy Lab
               </div>
               <div className="text-[10px] sm:text-xs text-muted-foreground font-mono leading-tight truncate">
-                BTC/USDT · {FIXED_CONFIG_SUMMARY.intervalLabel} · {FIXED_CONFIG_SUMMARY.splitLabel}
+                {headerSubtitle} · {FIXED_CONFIG_SUMMARY.splitLabel}
               </div>
             </div>
           </div>
@@ -71,6 +132,12 @@ function Shell() {
       </header>
 
       <main className="mx-auto max-w-6xl px-3 sm:px-6 py-4 sm:py-6">
+        <ConfigBar
+          config={config}
+          onChange={setConfig}
+          onReset={() => setConfig(DEFAULT_CONFIG)}
+          isDefault={isDefaultConfig}
+        />
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="w-full">
           <TabsList className="grid grid-cols-2 w-full sm:w-auto sm:inline-grid mb-4 font-mono uppercase text-[11px] tracking-wider">
             <TabsTrigger value="tournament">Tournament</TabsTrigger>
@@ -99,7 +166,7 @@ function Shell() {
       </main>
 
       <footer className="mx-auto max-w-6xl px-3 sm:px-6 py-6 text-[10px] sm:text-xs text-muted-foreground/80 font-mono leading-relaxed">
-        Real BTC/USDT klines from Binance · {FIXED_CONFIG_SUMMARY.feeLabel} · {FIXED_CONFIG_SUMMARY.riskLabel} · Walk-forward in-sample / out-of-sample. Past performance ≠ future results. Research only.
+        Real BTC/USDT klines from Binance · {FIXED_CONFIG_SUMMARY.feeLabel} · {summary.riskLabel} · Walk-forward in-sample / out-of-sample. Past performance ≠ future results. Research only.
       </footer>
 
       <Toaster />

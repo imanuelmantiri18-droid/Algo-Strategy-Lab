@@ -55,3 +55,22 @@ export const FIXED_CONFIG_SUMMARY = {
   capitalLabel: "$10,000 starting capital",
   ddFilterPct: 40,
 };
+
+function intervalToLabel(v: string): string {
+  if (v === "1d") return "1D candles";
+  if (v.endsWith("h")) return `${v.replace("h", "").toUpperCase()}H candles`;
+  return `${v} candles`;
+}
+
+/**
+ * Derive the human-readable summary labels for the *current* user-edited
+ * config. Only the editable fields (interval, leverage, riskPerTradePct)
+ * change relative to FIXED_CONFIG_SUMMARY — the others stay locked.
+ */
+export function deriveConfigSummary(c: LabConfig) {
+  return {
+    ...FIXED_CONFIG_SUMMARY,
+    intervalLabel: intervalToLabel(c.interval),
+    riskLabel: `${c.risk.leverage}× leverage · ${c.risk.riskPerTradePct}% risk/trade · R:R 1:${c.risk.riskRewardRatio}`,
+  };
+}
