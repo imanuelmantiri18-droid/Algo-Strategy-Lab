@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CandleChart } from "./CandleChart";
 
 type BotStatus = {
   connected: boolean;
@@ -357,6 +358,13 @@ export function LiveMonitor() {
           />
         </div>
       </div>
+
+      {/* Candlestick Chart */}
+      <CandleChart
+        markPrice={status.markPrice}
+        sl={status.sl}
+        tp={status.tp}
+      />
 
       {/* Balance + Capital row */}
       <div className="rounded-xl border border-border bg-card p-4 flex flex-wrap gap-x-8 gap-y-3">

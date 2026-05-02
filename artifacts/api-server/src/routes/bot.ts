@@ -142,6 +142,20 @@ router.get("/bot/status", async (req, res, next) => {
   }
 });
 
+// GET /api/bot/candles — last N closed 1H candles for the live chart
+router.get("/bot/candles", async (req, res, next) => {
+  try {
+    const limit = Math.min(200, Math.max(20, Number(req.query.limit) || 80));
+    const raw = await binancePublic<BinanceKline[]>("/fapi/v1/klines", {
+      symbol: "BTCUSDT", interval: "1h", limit: limit + 1,
+    });
+    const candles = raw.slice(0, -1).map(toCandle); // drop last (still forming)
+    res.json({ candles });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // GET /api/bot/trades — returns persisted trade history (written by live-bot.ts)
 router.get("/bot/trades", (_req, res) => {
   try {
