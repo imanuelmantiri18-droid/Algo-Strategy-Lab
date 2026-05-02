@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LabPage } from "@/pages/LabPage";
 import { TournamentPage } from "@/pages/TournamentPage";
+import { LiveMonitor } from "@/components/LiveMonitor";
 import {
   DEFAULT_CONFIG,
   FIXED_CONFIG_SUMMARY,
@@ -54,7 +55,7 @@ const queryClient = new QueryClient({
   },
 });
 
-type TabKey = "lab" | "tournament";
+type TabKey = "lab" | "tournament" | "live";
 
 function Shell() {
   const [tab, setTab] = useState<TabKey>("tournament");
@@ -145,9 +146,13 @@ function Shell() {
           isDefault={isDefaultConfig}
         />
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="w-full">
-          <TabsList className="grid grid-cols-2 w-full sm:w-auto sm:inline-grid mb-4 font-mono uppercase text-[11px] tracking-wider">
+          <TabsList className="grid grid-cols-3 w-full sm:w-auto sm:inline-grid mb-4 font-mono uppercase text-[11px] tracking-wider">
             <TabsTrigger value="tournament">Tournament</TabsTrigger>
             <TabsTrigger value="lab">Single Strategy</TabsTrigger>
+            <TabsTrigger value="live" className="relative">
+              Live Bot
+              <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="tournament" className="mt-0">
             <TournamentPage
@@ -167,6 +172,9 @@ function Shell() {
               selectedStrategyId={selectedStrategyId}
               onSelectedStrategyIdChange={setSelectedStrategyId}
             />
+          </TabsContent>
+          <TabsContent value="live" className="mt-0">
+            <LiveMonitor />
           </TabsContent>
         </Tabs>
       </main>
