@@ -1,8 +1,16 @@
 import { Router, type IRouter } from "express";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getStrategy, atr, highsArr, lowsArr, closesArr } from "../lib/strategies";
 import type { Candle, Interval } from "../types/strategy";
 import { INTERVAL_MS } from "../types/strategy";
+
+const TRADES_FILE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../trade-history.json",
+);
 
 const router: IRouter = Router();
 
@@ -131,6 +139,16 @@ router.get("/bot/status", async (req, res, next) => {
     });
   } catch (e) {
     next(e);
+  }
+});
+
+// GET /api/bot/trades — returns persisted trade history (written by live-bot.ts)
+router.get("/bot/trades", (_req, res) => {
+  try {
+    const trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8"));
+    res.json({ trades });
+  } catch {
+    res.json({ trades: [] });
   }
 });
 

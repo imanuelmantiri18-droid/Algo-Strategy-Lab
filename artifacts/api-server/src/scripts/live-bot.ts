@@ -12,6 +12,9 @@
  * and closes with a market order when price crosses SL or TP. This avoids
  * Binance Testnet's -4120 rejection of conditional order types.
  *
+ * Every trade open/close is appended to trade-history.json in the api-server
+ * directory so the Live Bot UI panel can display history across restarts.
+ *
  * USAGE:
  *   pnpm --filter @workspace/api-server run live -- [flags]
  *
@@ -32,7 +35,10 @@
  */
 
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   STRATEGIES,
@@ -54,6 +60,96 @@ const ATR_PERIOD = 14;
 const ATR_MULT_SL = 1.5;
 const RR_RATIO = 2;
 const POLL_INTERVAL_MS = 5_000;
+
+// Trade history file — shared with the API server route /api/bot/trades.
+const TRADES_FILE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../trade-history.json",
+);
+
+// ---------------------------------------------------------------------------
+// TRADE HISTORY (persisted to file so UI shows history across restarts)
+// ---------------------------------------------------------------------------
+
+export type TradeRecord = {
+  id: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  entryTime: string;
+  entryPrice: number;
+  sl: number;
+  tp: number;
+  exitTime?: string;
+  exitPrice?: number;
+  exitReason?: "SL" | "TP" | "signal_exit";
+  pnl?: number;
+  status: "open" | "closed";
+};
+
+function loadTrades(): TradeRecord[] {
+  try {
+    return JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[];
+  } catch {
+    return [];
+  }
+}
+
+function saveTrades(trades: TradeRecord[]): void {
+  try {
+    fs.writeFileSync(TRADES_FILE, JSON.stringify(trades, null, 2));
+  } catch (e) {
+    warn(`could not save trades: ${(e as Error).message}`);
+  }
+}
+
+function recordOpen(
+  symbol: string,
+  side: "BUY" | "SELL",
+  qty: number,
+  entryPrice: number,
+  sl: number,
+  tp: number,
+): string {
+  const trades = loadTrades();
+  // Close any stale open records (shouldn't happen, but safety net).
+  for (const t of trades) {
+    if (t.status === "open") {
+      t.status = "closed";
+      t.exitReason = "signal_exit";
+      t.exitTime = new Date().toISOString();
+    }
+  }
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  trades.push({ id, symbol, side, qty, entryTime: new Date().toISOString(), entryPrice, sl, tp, status: "open" });
+  saveTrades(trades);
+  return id;
+}
+
+function recordClose(
+  tradeId: string,
+  exitPrice: number,
+  exitReason: "SL" | "TP" | "signal_exit",
+): void {
+  const trades = loadTrades();
+  const t = trades.find((x) => x.id === tradeId);
+  if (!t) return;
+  const priceDiff = t.side === "BUY" ? exitPrice - t.entryPrice : t.entryPrice - exitPrice;
+  const pnl = priceDiff * t.qty;
+  Object.assign(t, {
+    exitTime: new Date().toISOString(),
+    exitPrice,
+    exitReason,
+    pnl,
+    status: "closed",
+  });
+  saveTrades(trades);
+  log(`📒 trade recorded: ${t.side} ${t.qty} BTC  entry=$${t.entryPrice.toFixed(2)}  exit=$${exitPrice.toFixed(2)}  pnl=${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}  reason=${exitReason}`);
+}
+
+// ---------------------------------------------------------------------------
+// CLI ARGS
+// ---------------------------------------------------------------------------
 
 type CliConfig = {
   strategyId: string;
@@ -83,7 +179,7 @@ function parseArgs(argv: string[]): CliConfig {
   if (flags["force-signal"] !== undefined) {
     const v = Number(flags["force-signal"]);
     if (v === 1 || v === -1 || v === 0) forceSignal = v as Signal;
-    else throw new Error(`--force-signal must be 1 (long), -1 (short), or 0 (close/flat)`);
+    else throw new Error(`--force-signal must be 1, -1, or 0`);
   }
   return {
     strategyId: String(flags.strategy ?? "fractal_breakout"),
@@ -102,9 +198,7 @@ function parseArgs(argv: string[]): CliConfig {
 // LOGGING
 // ---------------------------------------------------------------------------
 
-function ts(): string {
-  return new Date().toISOString().replace("T", " ").slice(0, 19);
-}
+function ts(): string { return new Date().toISOString().replace("T", " ").slice(0, 19); }
 function log(...args: unknown[]): void { console.log(`[${ts()}]`, ...args); }
 function warn(...args: unknown[]): void { console.warn(`[${ts()}] ⚠`, ...args); }
 function err(...args: unknown[]): void { console.error(`[${ts()}] ✗`, ...args); }
@@ -124,9 +218,7 @@ class BinanceTestnetClient {
   }
 
   async getPublic<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
-    const qs = new URLSearchParams(
-      Object.entries(params).map(([k, v]) => [k, String(v)]),
-    ).toString();
+    const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
     const url = `${TESTNET_BASE}${path}${qs ? `?${qs}` : ""}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`GET ${path} → ${res.status} ${await res.text()}`);
@@ -138,10 +230,7 @@ class BinanceTestnetClient {
     path: string,
     params: Record<string, string | number | boolean> = {},
   ): Promise<T> {
-    const merged: Record<string, string> = {
-      recvWindow: "5000",
-      timestamp: String(Date.now()),
-    };
+    const merged: Record<string, string> = { recvWindow: "5000", timestamp: String(Date.now()) };
     for (const [k, v] of Object.entries(params)) merged[k] = String(v);
     const qs = new URLSearchParams(merged).toString();
     const signature = this.sign(qs);
@@ -157,10 +246,7 @@ class BinanceTestnetClient {
 // CANDLES
 // ---------------------------------------------------------------------------
 
-type BinanceKline = [
-  number, string, string, string, string, string,
-  number, string, number, string, string, string,
-];
+type BinanceKline = [number, string, string, string, string, string, number, ...unknown[]];
 
 function klineToCandle(k: BinanceKline): Candle {
   return { t: new Date(k[0]).toISOString(), o: Number(k[1]), h: Number(k[2]), l: Number(k[3]), c: Number(k[4]), v: Number(k[5]) };
@@ -178,7 +264,7 @@ async function fetchClosedCandles(
 }
 
 // ---------------------------------------------------------------------------
-// MARK PRICE (for software SL/TP checks)
+// MARK PRICE
 // ---------------------------------------------------------------------------
 
 async function getMarkPrice(client: BinanceTestnetClient, symbol: string): Promise<number> {
@@ -192,15 +278,7 @@ async function getMarkPrice(client: BinanceTestnetClient, symbol: string): Promi
 
 type ExchangeFilter = { filterType: string; [k: string]: unknown };
 type ExchangeSymbol = { symbol: string; pricePrecision: number; quantityPrecision: number; filters: ExchangeFilter[] };
-
-type SymbolMeta = {
-  pricePrecision: number;
-  qtyPrecision: number;
-  tickSize: number;
-  stepSize: number;
-  minQty: number;
-  minNotional: number;
-};
+type SymbolMeta = { pricePrecision: number; qtyPrecision: number; tickSize: number; stepSize: number; minQty: number; minNotional: number };
 
 async function loadSymbolMeta(client: BinanceTestnetClient, symbol: string): Promise<SymbolMeta> {
   const info = await client.getPublic<{ symbols: ExchangeSymbol[] }>("/fapi/v1/exchangeInfo");
@@ -221,7 +299,7 @@ function roundToStep(v: number, step: number): number { return Math.floor(v / st
 function fmt(n: number, p: number): string { return n.toFixed(p); }
 
 // ---------------------------------------------------------------------------
-// POSITION
+// POSITION / BALANCE
 // ---------------------------------------------------------------------------
 
 type PositionInfo = { positionAmt: number; entryPrice: number; unrealizedProfit: number };
@@ -246,7 +324,7 @@ async function setLeverage(client: BinanceTestnetClient, symbol: string, leverag
 }
 
 // ---------------------------------------------------------------------------
-// ORDER PLACEMENT (market only — no conditional orders)
+// ORDERS
 // ---------------------------------------------------------------------------
 
 async function placeMarketOrder(
@@ -258,10 +336,7 @@ async function placeMarketOrder(
   reduceOnly = false,
 ): Promise<void> {
   const params: Record<string, string | number | boolean> = {
-    symbol,
-    side,
-    type: "MARKET",
-    quantity: fmt(qty, meta.qtyPrecision),
+    symbol, side, type: "MARKET", quantity: fmt(qty, meta.qtyPrecision),
   };
   if (reduceOnly) params.reduceOnly = "true";
   await client.signed("POST", "/fapi/v1/order", params);
@@ -269,11 +344,10 @@ async function placeMarketOrder(
 
 // ---------------------------------------------------------------------------
 // SOFTWARE SL/TP STATE
-// In-memory only. If bot restarts, it re-reads position from exchange but
-// won't know the original SL/TP — in that case it relies on strategy signals.
 // ---------------------------------------------------------------------------
 
 type SoftTrade = {
+  id: string;       // links to TradeRecord for history logging
   side: "BUY" | "SELL";
   qty: number;
   sl: number;
@@ -299,7 +373,7 @@ async function runTick(
   const { strategy, params } = state;
   if (!strategy) return;
 
-  // 1. Fetch mark price + position FIRST (for software SL/TP check).
+  // 1. Fetch mark price + position first (for software SL/TP check).
   const [markPrice, pos] = await Promise.all([
     getMarkPrice(client, cfg.symbol),
     getPosition(client, cfg.symbol),
@@ -307,21 +381,25 @@ async function runTick(
   const currentPosAmt = pos.positionAmt;
   const currentPos: Signal = currentPosAmt > 0 ? 1 : currentPosAmt < 0 ? -1 : 0;
 
-  // 2. Software SL/TP enforcement — runs on every 5s tick regardless of candle close.
+  // 2. Software SL/TP — checked every 5s regardless of candle close.
   if (state.softTrade && currentPos !== 0) {
-    const { sl, tp, side, qty } = state.softTrade;
+    const { sl, tp, side, qty, id } = state.softTrade;
     const hitSl = side === "BUY" ? markPrice <= sl : markPrice >= sl;
     const hitTp = side === "BUY" ? markPrice >= tp : markPrice <= tp;
 
     if (hitSl || hitTp) {
-      const reason = hitSl ? `SL hit @ $${markPrice.toFixed(2)} (limit $${sl.toFixed(2)})` : `TP hit @ $${markPrice.toFixed(2)} (target $${tp.toFixed(2)})`;
+      const exitReason: "SL" | "TP" = hitSl ? "SL" : "TP";
+      const reason = hitSl
+        ? `SL hit @ $${markPrice.toFixed(2)} (limit $${sl.toFixed(2)})`
+        : `TP hit @ $${markPrice.toFixed(2)} (target $${tp.toFixed(2)})`;
       log(`🛑 ${reason} — closing ${side} position (${qty} BTC)…`);
       if (!cfg.dryRun) {
         const exitSide: "BUY" | "SELL" = side === "BUY" ? "SELL" : "BUY";
         await placeMarketOrder(client, cfg.symbol, exitSide, qty, meta, true);
+        recordClose(id, markPrice, exitReason);
       }
       state.softTrade = null;
-      log(`✓ position closed via software ${hitSl ? "SL" : "TP"}`);
+      log(`✓ position closed via software ${exitReason}`);
       return;
     }
 
@@ -337,10 +415,10 @@ async function runTick(
   if (candles.length < ATR_PERIOD + 10) { warn("Not enough candles yet; waiting…"); return; }
   const last = candles[candles.length - 1]!;
 
-  // 4. Only act on a NEW closed candle (avoid re-acting on same bar multiple times).
+  // 4. Only act on NEW closed candle.
   if (last.t === state.lastActedCandleTime && state.softTrade) return;
 
-  // 5. Generate strategy signal — same code path as the backtest engine.
+  // 5. Generate strategy signal — identical to the backtest engine.
   const signals = strategy.generateSignals(candles, params);
   const strategySignal: Signal = signals[signals.length - 1] ?? 0;
   const latestSignal: Signal =
@@ -358,13 +436,13 @@ async function runTick(
     `signal=${latestSignal}  position=${currentPos} (${currentPosAmt} BTC, uPnL $${pos.unrealizedProfit.toFixed(2)})`,
   );
 
-  // 7. If position is flat but softTrade still set, clear it (exchange closed it via SL/TP).
+  // 7. If flat but softTrade still set, position was closed externally.
   if (currentPos === 0 && state.softTrade) {
     log("position closed externally — clearing softTrade state");
     state.softTrade = null;
   }
 
-  // 8. Skip if candle already acted on AND no forced signal.
+  // 8. Already acted on this candle → skip.
   if (last.t === state.lastActedCandleTime) {
     log("hold (already acted on this candle)");
     return;
@@ -393,6 +471,9 @@ async function runTick(
     log(`closing existing ${currentPos > 0 ? "LONG" : "SHORT"} (${currentPosAmt} BTC)…`);
     const exitSide: "BUY" | "SELL" = currentPosAmt > 0 ? "SELL" : "BUY";
     await placeMarketOrder(client, cfg.symbol, exitSide, Math.abs(currentPosAmt), meta, true);
+    if (state.softTrade) {
+      recordClose(state.softTrade.id, markPrice, "signal_exit");
+    }
     state.softTrade = null;
     await sleep(600);
   }
@@ -406,12 +487,12 @@ async function runTick(
     const trueNotional = qty * last.c;
 
     if (qty < meta.minQty) {
-      warn(`qty ${qty} < minQty ${meta.minQty}. Need capital ≥ $${((meta.minQty * last.c) / (cfg.riskPct / 100) / cfg.leverage).toFixed(2)}.`);
+      warn(`qty ${qty} < minQty ${meta.minQty}.`);
       state.lastActedCandleTime = last.t;
       return;
     }
     if (trueNotional < meta.minNotional) {
-      warn(`notional $${trueNotional.toFixed(2)} < minNotional $${meta.minNotional}. Increase capital/risk/leverage.`);
+      warn(`notional $${trueNotional.toFixed(2)} < minNotional $${meta.minNotional}.`);
       state.lastActedCandleTime = last.t;
       return;
     }
@@ -425,8 +506,10 @@ async function runTick(
 
     await placeMarketOrder(client, cfg.symbol, side, qty, meta, false);
 
-    // Store software SL/TP in memory.
-    state.softTrade = { side, qty, sl, tp, entryPrice: last.c };
+    // Persist to trade history file.
+    const tradeId = recordOpen(cfg.symbol, side, qty, last.c, sl, tp);
+
+    state.softTrade = { id: tradeId, side, qty, sl, tp, entryPrice: last.c };
 
     log(`✓ entered ${side} ${qty} BTC  |  software SL=$${sl.toFixed(2)}  TP=$${tp.toFixed(2)}`);
     log(`  → bot will auto-close when mark price hits SL or TP (checked every ${POLL_INTERVAL_MS / 1000}s)`);
@@ -454,6 +537,7 @@ async function main(): Promise<void> {
   log(`Risk/trade:  ${cfg.riskPct}%`);
   log(`Capital:     $${cfg.capital} USDT (sizing basis)`);
   log(`SL/TP:       software-enforced (checked every ${POLL_INTERVAL_MS / 1000}s)`);
+  log(`Trade log:   ${TRADES_FILE}`);
   log(`Mode:        ${cfg.dryRun ? "DRY-RUN (no orders)" : "LIVE on TESTNET"}`);
   log("─────────────────────────────────────────────────────");
 
@@ -467,7 +551,7 @@ async function main(): Promise<void> {
   const client = new BinanceTestnetClient(apiKey, apiSecret);
 
   const meta = await loadSymbolMeta(client, cfg.symbol);
-  log(`exchangeInfo: tick=${meta.tickSize} step=${meta.stepSize} minQty=${meta.minQty} minNotional=$${meta.minNotional} pricePrec=${meta.pricePrecision} qtyPrec=${meta.qtyPrecision}`);
+  log(`exchangeInfo: tick=${meta.tickSize} step=${meta.stepSize} minQty=${meta.minQty} minNotional=$${meta.minNotional}`);
 
   if (!cfg.dryRun) {
     try { await setLeverage(client, cfg.symbol, cfg.leverage); log(`leverage set to ${cfg.leverage}x`); }
