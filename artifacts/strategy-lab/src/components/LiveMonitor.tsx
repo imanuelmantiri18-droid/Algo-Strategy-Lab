@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type BotStatus = {
   connected: boolean;
@@ -103,13 +103,122 @@ function fmtPrice(n: number) {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// ---------------------------------------------------------------------------
+// AUDIO ALERT — uses Web Audio API, no external deps
+// ---------------------------------------------------------------------------
+
+function playBeep(type: "open" | "close_profit" | "close_loss") {
+  try {
+    const ctx = new AudioContext();
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+
+    const configs =
+      type === "open"
+        ? [{ freq: 520, dur: 0.12, t: 0 }, { freq: 660, dur: 0.18, t: 0.14 }]
+        : type === "close_profit"
+        ? [{ freq: 440, dur: 0.1, t: 0 }, { freq: 550, dur: 0.1, t: 0.12 }, { freq: 660, dur: 0.2, t: 0.24 }]
+        : [{ freq: 330, dur: 0.15, t: 0 }, { freq: 260, dur: 0.25, t: 0.17 }];
+
+    for (const { freq, dur, t } of configs) {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = "sine";
+      g.gain.setValueAtTime(0.18, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + dur);
+      osc.start(ctx.currentTime + t);
+      osc.stop(ctx.currentTime + t + dur + 0.05);
+    }
+    setTimeout(() => ctx.close(), 2000);
+  } catch { /* AudioContext not supported */ }
+}
+
+function sendBrowserNotif(title: string, body: string, icon = "📊") {
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission === "granted") {
+    new Notification(`${icon} ${title}`, { body, silent: true });
+  }
+}
+
 export function LiveMonitor() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>("");
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [notifLog, setNotifLog] = useState<string[]>([]);
+
+  const prevTradeCount = useRef(0);
+  const prevOpenId = useRef<string | null>(null);
+  const isFirstLoad = useRef(true);
 
   const countdown = useCountdown(status?.nextCandleCloseMs);
+
+  // Request browser notification permission on mount
+  useEffect(() => {
+    if (typeof Notification !== "undefined") {
+      if (Notification.permission === "granted") setNotifEnabled(true);
+    }
+  }, []);
+
+  function requestNotifPermission() {
+    if (typeof Notification === "undefined") return;
+    Notification.requestPermission().then((p) => {
+      setNotifEnabled(p === "granted");
+    });
+  }
+
+  function addLog(msg: string) {
+    setNotifLog((prev) => [`${new Date().toLocaleTimeString("id-ID")} — ${msg}`, ...prev].slice(0, 10));
+  }
+
+  function checkAlerts(newTrades: TradeRecord[]) {
+    if (isFirstLoad.current) {
+      // On first load, just record baseline — don't fire alerts for existing trades
+      prevTradeCount.current = newTrades.length;
+      const openT = newTrades.find((t) => t.status === "open");
+      prevOpenId.current = openT?.id ?? null;
+      isFirstLoad.current = false;
+      return;
+    }
+
+    const openTrade = newTrades.find((t) => t.status === "open");
+
+    // NEW trade opened
+    if (openTrade && openTrade.id !== prevOpenId.current) {
+      const dir = openTrade.side === "BUY" ? "LONG ▲" : "SHORT ▼";
+      const msg = `Trade dibuka: ${dir} ${openTrade.qty} BTC @ $${openTrade.entryPrice.toFixed(2)}`;
+      playBeep("open");
+      sendBrowserNotif("Bot: Trade Baru!", `${dir} ${openTrade.qty} BTC @ $${openTrade.entryPrice.toFixed(2)}  |  SL $${openTrade.sl.toFixed(2)}  TP $${openTrade.tp.toFixed(2)}`, "🚀");
+      addLog(msg);
+      prevOpenId.current = openTrade.id;
+    }
+
+    // Trade CLOSED (was open before, now closed)
+    if (prevOpenId.current && !openTrade) {
+      const closedTrade = newTrades.find((t) => t.id === prevOpenId.current && t.status === "closed");
+      if (closedTrade) {
+        const pnl = closedTrade.pnl ?? 0;
+        const dir = closedTrade.side === "BUY" ? "LONG" : "SHORT";
+        const pnlStr = `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}`;
+        const reason = closedTrade.exitReason?.toUpperCase() ?? "closed";
+        const msg = `Trade ditutup (${reason}): ${dir} ${pnlStr}`;
+        playBeep(pnl >= 0 ? "close_profit" : "close_loss");
+        sendBrowserNotif(
+          `Bot: Trade ${reason} ${pnl >= 0 ? "✅ Profit" : "❌ Loss"}`,
+          `${dir} @ exit $${(closedTrade.exitPrice ?? 0).toFixed(2)}  |  P&L ${pnlStr}`,
+          pnl >= 0 ? "💰" : "🔴",
+        );
+        addLog(msg);
+      }
+      prevOpenId.current = null;
+    }
+
+    prevTradeCount.current = newTrades.length;
+  }
 
   const fetchAll = () => {
     const t1 = fetch("/api/bot/status")
@@ -122,7 +231,11 @@ export function LiveMonitor() {
 
     const t2 = fetch("/api/bot/trades")
       .then((r) => r.json())
-      .then((d: { trades: TradeRecord[] }) => setTrades((d.trades ?? []).slice().reverse()))
+      .then((d: { trades: TradeRecord[] }) => {
+        const sorted = (d.trades ?? []).slice().reverse();
+        checkAlerts(d.trades ?? []);
+        setTrades(sorted);
+      })
       .catch(() => {});
 
     Promise.all([t1, t2]).then(() => setLoading(false));
@@ -186,7 +299,21 @@ export function LiveMonitor() {
           <span className="text-border">·</span>
           <span>Basis ${cfg.capital}</span>
         </div>
-        <div className="ml-auto text-[10px] font-mono text-muted-foreground">update {lastUpdate}</div>
+        <div className="ml-auto flex items-center gap-3">
+          {notifEnabled ? (
+            <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
+              <span>🔔</span> Notif aktif
+            </span>
+          ) : (
+            <button
+              onClick={requestNotifPermission}
+              className="text-[10px] font-mono px-2 py-1 rounded border border-border bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              🔔 Aktifkan notifikasi
+            </button>
+          )}
+          <span className="text-[10px] font-mono text-muted-foreground">update {lastUpdate}</span>
+        </div>
       </div>
 
       {/* Stats grid */}
@@ -330,10 +457,31 @@ export function LiveMonitor() {
         )}
       </div>
 
+      {/* Alert log */}
+      {notifLog.length > 0 && (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="px-4 py-2 border-b border-border flex items-center justify-between">
+            <span className="text-xs font-mono font-bold uppercase tracking-widest text-foreground">Log Alert</span>
+            <button
+              onClick={() => setNotifLog([])}
+              className="text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+            >
+              hapus
+            </button>
+          </div>
+          <div className="px-4 py-2 space-y-1">
+            {notifLog.map((entry, i) => (
+              <div key={i} className="text-[11px] font-mono text-muted-foreground">{entry}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Info note */}
       <div className="rounded-xl border border-border/50 bg-muted/30 px-4 py-3 text-[11px] font-mono text-muted-foreground leading-relaxed">
         <span className="text-primary font-bold">Cara kerja: </span>
-        Bot polling setiap 5 detik. Hanya bertindak saat candle 1H baru close. Strategy <span className="text-foreground">{cfg.strategyName}</span> mendeteksi 5-bar fractal → buka LONG/SHORT dengan SL (ATR×1.5) &amp; TP (ATR×3) dijaga software. Trade history disimpan ke file dan persisten walau bot restart.
+        Bot polling setiap 5 detik. Hanya bertindak saat candle 1H baru close. Strategy <span className="text-foreground">{cfg.strategyName}</span> mendeteksi 5-bar fractal → buka LONG/SHORT dengan SL (ATR×1.5) &amp; TP (ATR×3) dijaga software.
+        {" "}Notifikasi + suara berbunyi otomatis saat trade dibuka atau ditutup — cukup biarkan tab ini terbuka di background.
       </div>
     </div>
   );
