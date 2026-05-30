@@ -1,22 +1,12 @@
 FROM node:20-alpine
 
-RUN npm install -g pnpm@9.15.0
+RUN npm install -g tsx@4.21.0
 
 WORKDIR /app
 
-COPY pnpm-workspace.yaml ./
-COPY package.json ./
-COPY pnpm-lock.yaml ./
+COPY artifacts/api-server/src/ ./src/
 
-COPY lib/api-zod/ ./lib/api-zod/
-COPY lib/db/ ./lib/db/
-COPY artifacts/api-server/ ./artifacts/api-server/
-
-RUN pnpm install --no-frozen-lockfile --ignore-scripts
-
-WORKDIR /app/artifacts/api-server
-
-CMD ["../../node_modules/.bin/tsx", "src/scripts/live-bot.ts", \
+CMD ["tsx", "src/scripts/live-bot.ts", \
      "--strategy=fractal_breakout", \
      "--interval=1h", \
      "--leverage=20", \
