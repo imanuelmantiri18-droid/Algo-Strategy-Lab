@@ -1,0 +1,8 @@
+[phases.install]
+cmds = ["npm install -g pnpm@9 && pnpm install --frozen-lockfile --ignore-scripts"]
+
+[phases.build]
+cmds = []
+
+[start]
+cmd = "pnpm --filter @workspace/api-server run live -- --strategy=fractal_breakout --interval=1h --leverage=20 --risk=10 --capital=100 --symbol=BTCUSDT"
