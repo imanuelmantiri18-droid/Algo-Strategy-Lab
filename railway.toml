@@ -1,7 +1,7 @@
 [build]
-builder = "nixpacks"
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "pnpm --filter @workspace/api-server run live -- --strategy=fractal_breakout --interval=1h --leverage=20 --risk=10 --capital=100 --symbol=BTCUSDT"
 restartPolicyType = "always"
 restartPolicyMaxRetries = 10
