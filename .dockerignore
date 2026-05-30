@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+**/dist
+**/.expo
+trade-history.json
+attached_assets
+artifacts/strategy-lab
+artifacts/mockup-sandbox
+lib/api-client-react
+lib/api-spec

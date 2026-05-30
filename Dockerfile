@@ -14,7 +14,9 @@ COPY artifacts/api-server/ ./artifacts/api-server/
 
 RUN pnpm install --no-frozen-lockfile --ignore-scripts
 
-CMD ["pnpm", "--filter", "@workspace/api-server", "run", "live", "--", \
+WORKDIR /app/artifacts/api-server
+
+CMD ["../../node_modules/.bin/tsx", "src/scripts/live-bot.ts", \
      "--strategy=fractal_breakout", \
      "--interval=1h", \
      "--leverage=20", \
