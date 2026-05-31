@@ -204,6 +204,22 @@ function warn(...args: unknown[]): void { console.warn(`[${ts()}] ⚠`, ...args)
 function err(...args: unknown[]): void { console.error(`[${ts()}] ✗`, ...args); }
 
 // ---------------------------------------------------------------------------
+// TELEGRAM NOTIFICATIONS — silent if env vars not set, never crashes bot
+// ---------------------------------------------------------------------------
+async function sendTelegram(msg: string): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "HTML" }),
+    });
+  } catch { /* never crash the bot for a notification */ }
+}
+
+// ---------------------------------------------------------------------------
 // BINANCE TESTNET REST CLIENT
 // ---------------------------------------------------------------------------
 
@@ -400,6 +416,16 @@ async function runTick(
       }
       state.softTrade = null;
       log(`✓ position closed via software ${exitReason}`);
+      const pnlEst = side === "BUY"
+        ? (markPrice - sl) * qty * (exitReason === "TP" ? RR_RATIO : -1)
+        : (sl - markPrice) * qty * (exitReason === "TP" ? RR_RATIO : -1);
+      await sendTelegram(
+        `${exitReason === "TP" ? "✅" : "❌"} <b>${side === "BUY" ? "LONG" : "SHORT"} DITUTUP — ${exitReason === "TP" ? "PROFIT" : "STOP LOSS"}</b>\n` +
+        `Pair: <b>${cfg.symbol}</b>\n` +
+        `Exit: <b>$${markPrice.toFixed(2)}</b>\n` +
+        `${exitReason === "TP" ? "TP" : "SL"} tercapai @ $${(exitReason === "TP" ? tp : sl).toFixed(2)}\n` +
+        `Est. PnL: ${pnlEst >= 0 ? "+" : ""}$${pnlEst.toFixed(2)}`
+      );
       return;
     }
 
@@ -473,6 +499,12 @@ async function runTick(
     await placeMarketOrder(client, cfg.symbol, exitSide, Math.abs(currentPosAmt), meta, true);
     if (state.softTrade) {
       recordClose(state.softTrade.id, markPrice, "signal_exit");
+      await sendTelegram(
+        `🔄 <b>${state.softTrade.side === "BUY" ? "LONG" : "SHORT"} DITUTUP — SIGNAL BALIK</b>\n` +
+        `Pair: <b>${cfg.symbol}</b>\n` +
+        `Exit: <b>$${markPrice.toFixed(2)}</b>\n` +
+        `Entry: $${state.softTrade.entryPrice.toFixed(2)}`
+      );
     }
     state.softTrade = null;
     await sleep(600);
@@ -513,6 +545,13 @@ async function runTick(
 
     log(`✓ entered ${side} ${qty} BTC  |  software SL=$${sl.toFixed(2)}  TP=$${tp.toFixed(2)}`);
     log(`  → bot will auto-close when mark price hits SL or TP (checked every ${POLL_INTERVAL_MS / 1000}s)`);
+    await sendTelegram(
+      `${side === "BUY" ? "🟢" : "🔴"} <b>${side === "BUY" ? "LONG" : "SHORT"} DIBUKA</b>\n` +
+      `Pair: <b>${cfg.symbol}</b>\n` +
+      `Harga entry: <b>$${last.c.toFixed(2)}</b>\n` +
+      `SL: $${sl.toFixed(2)}  |  TP: $${tp.toFixed(2)}\n` +
+      `Size: ${qty} BTC (~$${trueNotional.toFixed(0)})  |  ${cfg.leverage}x`
+    );
   } else {
     log("flat → flat (signal=0); position closed, no re-entry");
   }
