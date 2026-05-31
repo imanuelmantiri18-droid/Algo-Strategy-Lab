@@ -65,3 +65,9 @@ externalPort = 3000
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+TELEGRAM_BOT_TOKEN = "8064481752:AAFCE-kTqEvozNre0rwKAMwmnad8Hxt4PWM"
+TELEGRAM_CHAT_ID = "1124275291"
