@@ -4,5 +4,4 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "tsx src/scripts/live-bot.ts --strategy=fractal_breakout --interval=1h --leverage=20 --risk=10 --capital=100 --symbol=BTCUSDT"
-restartPolicyType = "always"
-restartPolicyMaxRetries = 10
+restartPolicyType = "never"

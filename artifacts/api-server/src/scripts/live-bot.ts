@@ -638,12 +638,33 @@ async function main(): Promise<void> {
 
   while (true) {
     try { await runTick(cfg, client, meta, state); }
-    catch (e) { err(`tick error: ${(e as Error).message}`); }
+    catch (e) {
+      err(`tick error: ${(e as Error).message}`);
+      await sendTelegram(`⚠️ <b>Bot Error</b>\n${(e as Error).message}\nAuto-retry dalam 30s...`);
+    }
     await sleep(POLL_INTERVAL_MS);
   }
 }
 
-main().catch((e) => {
-  err(`fatal: ${(e as Error).stack ?? (e as Error).message}`);
-  process.exit(1);
-});
+(async () => {
+  while (true) {
+    try {
+      await main();
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      err(`fatal error: ${msg} — restart dalam 60s`);
+      try {
+        const token = process.env.TELEGRAM_BOT_TOKEN;
+        const chatId = process.env.TELEGRAM_CHAT_ID;
+        if (token && chatId) {
+          await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, text: `💥 <b>Bot Error — Auto Restart</b>\n${msg}`, parse_mode: "HTML" }),
+          });
+        }
+      } catch { /* ignore */ }
+      await new Promise((r) => setTimeout(r, 60_000));
+    }
+  }
+})();
