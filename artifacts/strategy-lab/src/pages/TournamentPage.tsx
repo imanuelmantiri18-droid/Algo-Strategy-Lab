@@ -46,6 +46,8 @@ export function TournamentPage({ baseConfig, onApply }: Props) {
       risk: baseConfig.risk,
       walkForwardSplitDate: baseConfig.walkForwardSplitDate,
       maxDrawdownFilterPct: FIXED_CONFIG_SUMMARY.ddFilterPct,
+      dataSource: baseConfig.dataSource,
+      symbol: baseConfig.symbol,
     });
   };
 

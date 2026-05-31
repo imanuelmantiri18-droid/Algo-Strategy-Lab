@@ -7,6 +7,7 @@ import {
 } from "@workspace/api-zod";
 import { getStrategy, availableStrategies, STRATEGIES } from "../lib/strategies";
 import { getBtcHistory } from "../lib/marketData";
+import { getHlHistory } from "../lib/hyperliquidData";
 import {
   runBacktest,
   runBacktestMetricsOnly,
@@ -14,7 +15,20 @@ import {
   type BacktestResult,
   type RiskConfig,
 } from "../lib/backtest";
-import type { Interval } from "../types/strategy";
+import type { Candle, Interval } from "../types/strategy";
+
+async function fetchCandles(
+  dataSource: string | undefined | null,
+  symbol: string | undefined | null,
+  interval: Interval,
+  lookbackDays: number,
+): Promise<Candle[]> {
+  if (dataSource === "hyperliquid") {
+    const coin = (symbol || "BTC").toUpperCase().trim();
+    return getHlHistory(coin, interval, lookbackDays);
+  }
+  return getBtcHistory(interval, lookbackDays);
+}
 
 const router: IRouter = Router();
 
@@ -31,7 +45,9 @@ router.post("/backtest/run", async (req, res, next) => {
     return;
   }
   try {
-    const candles = await getBtcHistory(
+    const candles = await fetchCandles(
+      parsed.data.dataSource,
+      parsed.data.symbol,
       body.interval as Interval,
       body.lookbackDays,
     );
@@ -160,7 +176,9 @@ router.post("/backtest/optimize", async (req, res, next) => {
   }
 
   try {
-    const candles = await getBtcHistory(
+    const candles = await fetchCandles(
+      body.dataSource,
+      body.symbol,
       body.interval as Interval,
       body.lookbackDays,
     );
@@ -327,8 +345,11 @@ router.post("/backtest/optimize/stream", async (req, res, next) => {
   });
 
   try {
-    send("status", { phase: "fetching", message: "Fetching BTC/USDT klines from Binance…" });
-    const candles = await getBtcHistory(
+    const srcLabel = body.dataSource === "hyperliquid" ? `Hyperliquid ${body.symbol ?? "BTC"}` : "Binance BTC/USDT";
+    send("status", { phase: "fetching", message: `Fetching ${srcLabel} klines…` });
+    const candles = await fetchCandles(
+      body.dataSource,
+      body.symbol,
       body.interval as Interval,
       body.lookbackDays,
     );
@@ -433,7 +454,7 @@ router.post("/backtest/compare", async (req, res, next) => {
       const key = `${r.interval}:${r.lookbackDays}`;
       let candles = byKey.get(key);
       if (!candles) {
-        candles = await getBtcHistory(r.interval as Interval, r.lookbackDays);
+        candles = await fetchCandles(undefined, undefined, r.interval as Interval, r.lookbackDays);
         byKey.set(key, candles);
       }
       const strat = getStrategy(r.strategyId);
@@ -601,7 +622,9 @@ router.post("/backtest/tournament", async (req, res, next) => {
   }
   const body = parsed.data;
   try {
-    const candles = await getBtcHistory(
+    const candles = await fetchCandles(
+      body.dataSource,
+      body.symbol,
       body.interval as Interval,
       body.lookbackDays,
     );
@@ -663,11 +686,14 @@ router.post("/backtest/tournament/stream", async (req, res, next) => {
   });
 
   try {
+    const srcLabelTmt = body.dataSource === "hyperliquid" ? `Hyperliquid ${body.symbol ?? "BTC"}` : "Binance BTC/USDT";
     send("status", {
       phase: "fetching",
-      message: "Fetching BTC/USDT klines from Binance…",
+      message: `Fetching ${srcLabelTmt} klines…`,
     });
-    const candles = await getBtcHistory(
+    const candles = await fetchCandles(
+      body.dataSource,
+      body.symbol,
       body.interval as Interval,
       body.lookbackDays,
     );

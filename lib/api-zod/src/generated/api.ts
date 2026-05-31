@@ -224,6 +224,8 @@ export const RunBacktestBody = zod.object({
     .describe(
       "ISO date — candles strictly before this date are in-sample; everything from this date is out-of-sample. Overrides walkForwardSplit when present.",
     ),
+  dataSource: zod.enum(["binance", "hyperliquid"]).optional(),
+  symbol: zod.string().optional(),
 });
 
 export const runBacktestResponseRequestLookbackDaysMin = 7;
@@ -633,6 +635,8 @@ export const RunOptimizationBody = zod.object({
     .max(runOptimizationBodyTopNMax)
     .default(runOptimizationBodyTopNDefault)
     .describe("Cap response leaderboard to top N kept rows (default 100)"),
+  dataSource: zod.enum(["binance", "hyperliquid"]).optional(),
+  symbol: zod.string().optional(),
 });
 
 export const runOptimizationResponseRowsItemRiskLeverageMax = 50;
@@ -1070,6 +1074,8 @@ export const RunTournamentBody = zod.object({
   maxDrawdownFilterPct: zod
     .number()
     .default(runTournamentBodyMaxDrawdownFilterPctDefault),
+  dataSource: zod.enum(["binance", "hyperliquid"]).optional(),
+  symbol: zod.string().optional(),
 });
 
 export const RunTournamentResponse = zod.object({

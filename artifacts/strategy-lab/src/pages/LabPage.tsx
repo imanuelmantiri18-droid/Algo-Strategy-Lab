@@ -77,6 +77,8 @@ export function LabPage({
         initialCapital: config.initialCapital,
         walkForwardSplitDate: config.walkForwardSplitDate,
         risk: config.risk,
+        dataSource: config.dataSource,
+        symbol: config.symbol,
       },
     });
   };
@@ -149,7 +151,9 @@ export function LabPage({
           title={`Backtesting ${strategy?.name ?? "strategy"}`}
           subtitle={`${summary.intervalLabel} · ${summary.periodLabel}`}
           steps={[
-            "Fetching real BTC/USDT klines from Binance…",
+            config.dataSource === "hyperliquid"
+              ? `Fetching ${config.symbol ?? "HYPE"}/USDC klines from Hyperliquid…`
+              : "Fetching real BTC/USDT klines from Binance…",
             "Computing indicators…",
             "Generating signals…",
             "Walking trades through in-sample period…",

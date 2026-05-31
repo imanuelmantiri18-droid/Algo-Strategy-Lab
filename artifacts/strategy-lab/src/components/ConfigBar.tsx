@@ -4,6 +4,11 @@ import type { IntervalValue } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
+const HL_COINS = [
+  "HYPE","BTC","ETH","SOL","ARB","AVAX","DOGE","SUI","APT","WIF",
+  "PEPE","LINK","OP","INJ","TIA","SEI","ATOM","NEAR","BNB","XRP",
+];
+
 const INTERVAL_OPTIONS: Array<{ value: IntervalValue; label: string }> = [
   { value: "15m", label: "15m" },
   { value: "30m", label: "30m" },
@@ -39,6 +44,10 @@ export function ConfigBar({ config, onChange, onReset, isDefault }: Props) {
   const setRiskPct = (n: number) =>
     onChange({ ...config, risk: { ...config.risk, riskPerTradePct: n } });
   const setCapital = (n: number) => onChange({ ...config, initialCapital: n });
+  const isHL = config.dataSource === "hyperliquid";
+  const setSource = (src: "binance" | "hyperliquid") =>
+    onChange({ ...config, dataSource: src, symbol: src === "hyperliquid" ? (config.symbol ?? "HYPE") : undefined });
+  const setHlCoin = (coin: string) => onChange({ ...config, symbol: coin });
 
   // Real-trading sanity hint: Binance USDT-M perpetuals require min ~$5 notional.
   // notional = initialCapital * (riskPerTradePct/100) * leverage
@@ -157,6 +166,39 @@ export function ConfigBar({ config, onChange, onReset, isDefault }: Props) {
               wide
               onChange={setCapital}
             />
+          </div>
+        </ControlGroup>
+
+        <ControlGroup label="Data Source">
+          <div className="flex items-center gap-2">
+            <div className="flex border border-border/60 rounded overflow-hidden">
+              {(["binance", "hyperliquid"] as const).map((src) => (
+                <button
+                  key={src}
+                  type="button"
+                  onClick={() => setSource(src)}
+                  className={cn(
+                    "h-8 px-2.5 text-[11px] font-mono uppercase tracking-wider transition border-r border-border/40 last:border-r-0",
+                    (config.dataSource ?? "binance") === src
+                      ? "bg-primary/20 text-primary font-bold"
+                      : "text-muted-foreground hover:text-foreground hover:bg-card/60",
+                  )}
+                >
+                  {src === "binance" ? "Binance" : "Hyperliquid"}
+                </button>
+              ))}
+            </div>
+            {isHL && (
+              <select
+                value={config.symbol ?? "HYPE"}
+                onChange={(e) => setHlCoin(e.target.value)}
+                className="h-8 px-2 text-[11px] font-mono bg-card border border-border/60 rounded text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+              >
+                {HL_COINS.map((c) => (
+                  <option key={c} value={c}>{c}/USDC</option>
+                ))}
+              </select>
+            )}
           </div>
         </ControlGroup>
 

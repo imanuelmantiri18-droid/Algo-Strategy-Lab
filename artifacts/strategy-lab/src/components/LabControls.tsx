@@ -21,6 +21,8 @@ export type LabConfig = {
   walkForwardSplitDate?: string;
   useDateSplit: boolean;
   risk: RiskValues;
+  dataSource?: "binance" | "hyperliquid";
+  symbol?: string;
 };
 
 export const DEFAULT_RISK: RiskValues = {
