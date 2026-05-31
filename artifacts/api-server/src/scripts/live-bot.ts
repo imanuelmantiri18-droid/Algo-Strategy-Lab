@@ -626,6 +626,16 @@ async function main(): Promise<void> {
   }
 
   log(`polling every ${POLL_INTERVAL_MS / 1000}s. Ctrl+C to stop.`);
+
+  await sendTelegram(
+    `🤖 <b>Bot Aktif!</b>\n` +
+    `Strategy: <b>${cfg.strategyId}</b>\n` +
+    `Pair: <b>${cfg.symbol}</b>  |  TF: ${cfg.interval}\n` +
+    `Leverage: ${cfg.leverage}x  |  Risk: ${cfg.riskPct}%\n` +
+    `Mode: ${cfg.dryRun ? "DRY-RUN" : "LIVE TESTNET"}\n` +
+    `✅ Notifikasi Telegram aktif`
+  );
+
   while (true) {
     try { await runTick(cfg, client, meta, state); }
     catch (e) { err(`tick error: ${(e as Error).message}`); }
