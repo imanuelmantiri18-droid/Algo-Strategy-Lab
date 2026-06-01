@@ -233,10 +233,14 @@ class BinanceTestnetClient {
     return crypto.createHmac("sha256", this.apiSecret).update(query).digest("hex");
   }
 
+  private withTimeout(ms: number): AbortSignal {
+    return AbortSignal.timeout(ms);
+  }
+
   async getPublic<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
     const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
     const url = `${TESTNET_BASE}${path}${qs ? `?${qs}` : ""}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: this.withTimeout(15_000) });
     if (!res.ok) throw new Error(`GET ${path} → ${res.status} ${await res.text()}`);
     return (await res.json()) as T;
   }
@@ -251,7 +255,7 @@ class BinanceTestnetClient {
     const qs = new URLSearchParams(merged).toString();
     const signature = this.sign(qs);
     const url = `${TESTNET_BASE}${path}?${qs}&signature=${signature}`;
-    const res = await fetch(url, { method, headers: { "X-MBX-APIKEY": this.apiKey } });
+    const res = await fetch(url, { method, headers: { "X-MBX-APIKEY": this.apiKey }, signal: this.withTimeout(15_000) });
     const body = await res.text();
     if (!res.ok) throw new Error(`${method} ${path} → ${res.status} ${body}`);
     return JSON.parse(body) as T;
@@ -636,11 +640,19 @@ async function main(): Promise<void> {
     `✅ Notifikasi Telegram aktif`
   );
 
+  let consecutiveErrors = 0;
   while (true) {
-    try { await runTick(cfg, client, meta, state); }
-    catch (e) {
-      err(`tick error: ${(e as Error).message}`);
-      await sendTelegram(`⚠️ <b>Bot Error</b>\n${(e as Error).message}\nAuto-retry dalam 30s...`);
+    try {
+      await runTick(cfg, client, meta, state);
+      consecutiveErrors = 0;
+    } catch (e) {
+      consecutiveErrors++;
+      const msg = (e as Error).message;
+      err(`tick error [${consecutiveErrors}]: ${msg}`);
+      // Only notify Telegram after 3 consecutive failures to avoid spam
+      if (consecutiveErrors === 3) {
+        await sendTelegram(`⚠️ <b>Bot Error (3x berturut)</b>\n${msg}\nAuto-retry...`);
+      }
     }
     await sleep(POLL_INTERVAL_MS);
   }
