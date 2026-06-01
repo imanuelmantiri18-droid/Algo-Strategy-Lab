@@ -54,11 +54,15 @@ async function tgPost<T>(method: string, body: Record<string, unknown>): Promise
   return data.result;
 }
 
-async function tgGet<T>(method: string, params: Record<string, string | number> = {}): Promise<T> {
-  const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
-  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}${qs ? `?${qs}` : ""}`);
+async function tgCall<T>(method: string, body: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<T> {
+  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   const data = (await res.json()) as TgResponse<T>;
-  if (!data.ok) throw new Error(`Telegram ${method} gagal`);
+  if (!data.ok) throw new Error(`Telegram ${method} failed: ${JSON.stringify(data)}`);
   return data.result;
 }
 
@@ -234,35 +238,45 @@ async function processUpdate(update: TgUpdate): Promise<void> {
 }
 
 export async function startTelegramPolling(): Promise<void> {
-  if (!TOKEN || !ALLOWED_CHAT_ID) return;
+  if (!TOKEN || !ALLOWED_CHAT_ID) {
+    console.log("[telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — polling disabled");
+    return;
+  }
 
   let offset = 0;
   let started = false;
 
-  const poll = async () => {
+  const poll = async (): Promise<void> => {
     try {
       if (!started) {
-        const me = await tgGet<{ username: string }>("getMe");
+        const me = await tgCall<{ username: string }>("getMe");
         console.log(`[telegram] Bot @${me.username} aktif, menunggu perintah...`);
         await sendMessage(ALLOWED_CHAT_ID, `🤖 <b>Server restart — Bot siap!</b>\nKirim /help untuk daftar perintah.`).catch(() => {});
         started = true;
       }
 
-      const updates = await tgGet<TgUpdate[]>("getUpdates", {
-        offset,
-        timeout: 25,
-        allowed_updates: "message",
-      });
+      // Use long-poll with 20s timeout; give fetch 25s before aborting
+      const updates = await tgCall<TgUpdate[]>(
+        "getUpdates",
+        { offset, timeout: 20, allowed_updates: ["message"] },
+        25_000,
+      );
 
       for (const u of updates) {
         offset = u.update_id + 1;
-        processUpdate(u).catch(() => {});
+        processUpdate(u).catch((e: unknown) => {
+          console.error("[telegram] processUpdate error:", (e as Error).message);
+        });
       }
-    } catch {
-      // silent retry
+    } catch (e) {
+      console.error("[telegram] poll error:", (e as Error).message, "— retrying in 5s");
+      await new Promise((r) => setTimeout(r, 5_000));
     }
-    setTimeout(poll, 1000);
+    // Next tick immediately (long-poll already waits 20s internally)
+    setTimeout(poll, 100);
   };
 
-  poll().catch(() => {});
+  poll().catch((e: unknown) => {
+    console.error("[telegram] fatal poll error:", (e as Error).message);
+  });
 }
