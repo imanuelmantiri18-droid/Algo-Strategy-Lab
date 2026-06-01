@@ -130,12 +130,14 @@ function recordClose(
   tradeId: string,
   exitPrice: number,
   exitReason: "SL" | "TP" | "signal_exit",
+  actualPnl?: number,
 ): void {
   const trades = loadTrades();
   const t = trades.find((x) => x.id === tradeId);
   if (!t) return;
+  // Prefer actualPnl from Binance (leveraged, fee-adjusted) over local estimate
   const priceDiff = t.side === "BUY" ? exitPrice - t.entryPrice : t.entryPrice - exitPrice;
-  const pnl = priceDiff * t.qty;
+  const pnl = actualPnl ?? priceDiff * t.qty;
   Object.assign(t, {
     exitTime: new Date().toISOString(),
     exitPrice,
@@ -548,23 +550,23 @@ async function runTick(
       const reason = hitSl
         ? `SL hit @ $${markPrice.toFixed(2)} (limit $${sl.toFixed(2)})`
         : `TP hit @ $${markPrice.toFixed(2)} (target $${tp.toFixed(2)})`;
-      log(`🛑 ${reason} — closing ${side} position (${qty} BTC)…`);
+      log(`🛑 ${reason} — closing ${side} position (${Math.abs(currentPosAmt)} BTC)…`);
+      // Use actual Binance unrealizedProfit as PnL — includes leverage + fees
+      const actualPnl = pos.unrealizedProfit;
       if (!cfg.dryRun) {
         const exitSide: "BUY" | "SELL" = side === "BUY" ? "SELL" : "BUY";
-        await placeMarketOrder(client, cfg.symbol, exitSide, qty, meta, true);
-        recordClose(id, markPrice, exitReason);
+        // Use actual positionAmt from Binance, not softTrade qty, to avoid reduceOnly rejection
+        await placeMarketOrder(client, cfg.symbol, exitSide, Math.abs(currentPosAmt), meta, true);
+        recordClose(id, markPrice, exitReason, actualPnl);
       }
       state.softTrade = null;
-      log(`✓ position closed via software ${exitReason}`);
-      const pnlEst = side === "BUY"
-        ? (markPrice - sl) * qty * (exitReason === "TP" ? RR_RATIO : -1)
-        : (sl - markPrice) * qty * (exitReason === "TP" ? RR_RATIO : -1);
+      log(`✓ position closed via software ${exitReason}  PnL=${actualPnl >= 0 ? "+" : ""}$${actualPnl.toFixed(2)}`);
       await sendTelegram(
         `${exitReason === "TP" ? "✅" : "❌"} <b>${side === "BUY" ? "LONG" : "SHORT"} DITUTUP — ${exitReason === "TP" ? "PROFIT" : "STOP LOSS"}</b>\n` +
         `Pair: <b>${cfg.symbol}</b>\n` +
         `Exit: <b>$${markPrice.toFixed(2)}</b>\n` +
         `${exitReason === "TP" ? "TP" : "SL"} tercapai @ $${(exitReason === "TP" ? tp : sl).toFixed(2)}\n` +
-        `Est. PnL: ${pnlEst >= 0 ? "+" : ""}$${pnlEst.toFixed(2)}`
+        `PnL: <b>${actualPnl >= 0 ? "+" : ""}$${actualPnl.toFixed(2)}</b>`
       );
       return;
     }
@@ -674,23 +676,45 @@ async function runTick(
     const sl = side === "BUY" ? last.c - slDist : last.c + slDist;
     const tp = side === "BUY" ? last.c + tpDist : last.c - tpDist;
 
-    log(`opening ${side} ${qty} BTC  notional≈$${trueNotional.toFixed(2)}  SL=$${sl.toFixed(2)}  TP=$${tp.toFixed(2)}…`);
+    log(`opening ${side} ${qty} BTC  notional≈$${trueNotional.toFixed(2)}  SL≈$${sl.toFixed(2)}  TP≈$${tp.toFixed(2)}…`);
 
     await placeMarketOrder(client, cfg.symbol, side, qty, meta, false);
 
-    // Persist to trade history file.
-    const tradeId = recordOpen(cfg.symbol, side, qty, last.c, sl, tp);
+    // Wait for fill to settle, then fetch actual entry price and qty from Binance.
+    // Market orders can fill at a slightly different price than last.c, causing SL/TP
+    // levels and Telegram notifications to mismatch what Binance actually records.
+    await sleep(800);
+    let fillPrice = last.c;
+    let fillQty = qty;
+    try {
+      const filledPos = await getPosition(client, cfg.symbol);
+      if (Math.abs(filledPos.positionAmt) > 0) {
+        fillPrice = filledPos.entryPrice;
+        fillQty = Math.abs(filledPos.positionAmt);
+      }
+    } catch (e) {
+      warn(`could not confirm fill price; using candle close: ${(e as Error).message}`);
+    }
 
-    state.softTrade = { id: tradeId, side, qty, sl, tp, entryPrice: last.c };
+    // Recalculate SL/TP from actual fill price so they match what the bot monitors
+    const actualSlDist = atrVal * ATR_MULT_SL;
+    const actualTpDist = actualSlDist * RR_RATIO;
+    const actualSl = side === "BUY" ? fillPrice - actualSlDist : fillPrice + actualSlDist;
+    const actualTp = side === "BUY" ? fillPrice + actualTpDist : fillPrice - actualTpDist;
 
-    log(`✓ entered ${side} ${qty} BTC  |  software SL=$${sl.toFixed(2)}  TP=$${tp.toFixed(2)}`);
-    log(`  → bot will auto-close when mark price hits SL or TP (checked every ${POLL_INTERVAL_MS / 1000}s)`);
+    // Persist to trade history file using actual fill values.
+    const tradeId = recordOpen(cfg.symbol, side, fillQty, fillPrice, actualSl, actualTp);
+    state.softTrade = { id: tradeId, side, qty: fillQty, sl: actualSl, tp: actualTp, entryPrice: fillPrice };
+
+    log(`✓ entered ${side} ${fillQty} BTC @ fill $${fillPrice.toFixed(2)}  (candle close $${last.c.toFixed(2)})`);
+    log(`  SL=$${actualSl.toFixed(2)}  TP=$${actualTp.toFixed(2)}  (recalculated from fill)`);
+    log(`  → auto-close checks every ${POLL_INTERVAL_MS / 1000}s`);
     await sendTelegram(
       `${side === "BUY" ? "🟢" : "🔴"} <b>${side === "BUY" ? "LONG" : "SHORT"} DIBUKA</b>\n` +
       `Pair: <b>${cfg.symbol}</b>\n` +
-      `Harga entry: <b>$${last.c.toFixed(2)}</b>\n` +
-      `SL: $${sl.toFixed(2)}  |  TP: $${tp.toFixed(2)}\n` +
-      `Size: ${qty} BTC (~$${trueNotional.toFixed(0)})  |  ${cfg.leverage}x`
+      `Harga fill aktual: <b>$${fillPrice.toFixed(2)}</b>\n` +
+      `SL: $${actualSl.toFixed(2)}  |  TP: $${actualTp.toFixed(2)}\n` +
+      `Size: ${fillQty} BTC (~$${(fillQty * fillPrice).toFixed(0)})  |  ${cfg.leverage}x`
     );
   } else {
     log("flat → flat (signal=0); position closed, no re-entry");
