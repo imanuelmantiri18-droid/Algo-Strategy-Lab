@@ -278,7 +278,13 @@ function buildHistoryMsg(n: number): string {
   return msg;
 }
 
-function startCommandPolling(token: string, allowedChatId: number): void {
+// Pass client + cfg so /status can query Binance directly instead of reading a stale file
+function startCommandPolling(
+  token: string,
+  allowedChatId: number,
+  client: BinanceTestnetClient,
+  cfg: CliConfig,
+): void {
   let offset = 0;
 
   const poll = async (): Promise<void> => {
@@ -308,35 +314,66 @@ function startCommandPolling(token: string, allowedChatId: number): void {
               parse_mode: "HTML",
             });
           } else if (cmd === "/status") {
-            let trades: TradeRecord[];
-            try { trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[]; }
-            catch { trades = []; }
-            const open = trades.find((t) => t.status === "open");
-            const closed = trades.filter((t) => t.status === "closed");
-            const wins = closed.filter((t) => t.exitReason === "TP").length;
-            const losses = closed.filter((t) => t.exitReason === "SL").length;
-            const totalPnl = closed.reduce((a, t) => a + (t.pnl ?? 0), 0);
+            // Query Binance API directly — never rely on local trade-history.json for live data.
+            // The file is ephemeral on Railway and may be stale after restarts.
+            try {
+              const [pos, markData, balance] = await Promise.all([
+                getPosition(client, cfg.symbol),
+                client.getPublic<{ markPrice: string }>("/fapi/v1/premiumIndex", { symbol: cfg.symbol }),
+                getBalanceUsdt(client),
+              ]);
 
-            let text = `📡 <b>Status Live Bot</b>\n───────────────────────\n`;
-            if (open) {
-              const side = open.side === "BUY" ? "🟢 LONG" : "🔴 SHORT";
-              const since = open.entryTime.replace("T", " ").slice(0, 16) + " UTC";
-              text += `Posisi: <b>${side}</b> ${open.qty} BTC\nEntry: $${open.entryPrice.toFixed(2)} @ ${since}\nSL: $${open.sl.toFixed(2)}  |  TP: $${open.tp.toFixed(2)}\n`;
-            } else {
-              text += `Posisi: <b>⚪ FLAT</b>\n`;
+              const markPrice = Number(markData.markPrice);
+              const posAmt = pos.positionAmt;
+              const posLabel = posAmt > 0 ? "🟢 LONG" : posAmt < 0 ? "🔴 SHORT" : "⚪ FLAT";
+              const base = cfg.symbol.replace("USDT", "");
+
+              // Trade history stats from file (for W/L counts only)
+              let trades: TradeRecord[] = [];
+              try { trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[]; } catch { /* ok */ }
+              const closed = trades.filter((t) => t.status === "closed");
+              const wins = closed.filter((t) => t.exitReason === "TP").length;
+              const losses = closed.filter((t) => t.exitReason === "SL").length;
+              const totalPnl = closed.reduce((a, t) => a + (t.pnl ?? 0), 0);
+
+              // Find matching open trade in file for SL/TP (if available)
+              const openRec = trades.find((t) => t.status === "open");
+
+              let text = `📡 <b>Status Live Bot</b>\n───────────────────────\n`;
+              text += `Mark Price: <b>$${markPrice.toFixed(2)}</b>\n`;
+              text += `Posisi: <b>${posLabel}</b>`;
+
+              if (posAmt !== 0) {
+                text += ` (${Math.abs(posAmt)} ${base})\n`;
+                text += `Entry: $${pos.entryPrice.toFixed(2)}\n`;
+                text += `uPnL: <b>${pos.unrealizedProfit >= 0 ? "+" : ""}$${pos.unrealizedProfit.toFixed(2)}</b>\n`;
+                if (openRec) {
+                  text += `SL: $${openRec.sl.toFixed(2)}  |  TP: $${openRec.tp.toFixed(2)}\n`;
+                }
+              } else {
+                text += "\n";
+              }
+
+              text += `───────────────────────\n`;
+              text += `Balance: <b>$${balance.toFixed(2)}</b> USDT\n`;
+              text += `Total PnL: <b>${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}</b>\n`;
+              text += `W/L: ${wins}/${losses}  |  Closed: ${closed.length}\n`;
+              text += `Strategy: ${cfg.strategyId}  |  TF: ${cfg.interval}`;
+
+              await tgCall(token, "sendMessage", { chat_id: allowedChatId, text, parse_mode: "HTML" });
+            } catch (e) {
+              await tgCall(token, "sendMessage", {
+                chat_id: allowedChatId,
+                text: `❌ Gagal ambil status dari Binance: ${(e as Error).message}`,
+                parse_mode: "HTML",
+              });
             }
-            text +=
-              `───────────────────────\n` +
-              `Total PnL: <b>${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}</b>\n` +
-              `W/L: ${wins}/${losses}  |  Closed: ${closed.length}\n` +
-              `Strategy: fractal_breakout  |  TF: 1h`;
-            await tgCall(token, "sendMessage", { chat_id: allowedChatId, text, parse_mode: "HTML" });
           } else if (cmd === "/help" || cmd === "/start") {
             await tgCall(token, "sendMessage", {
               chat_id: allowedChatId,
               text:
                 `🤖 <b>Algo Bot — Perintah</b>\n\n` +
-                `/status         — posisi saat ini + statistik\n` +
+                `/status         — posisi saat ini (live dari Binance)\n` +
                 `/history [N]    — N trade terakhir (default 5)\n` +
                 `/help           — tampilkan ini`,
               parse_mode: "HTML",
@@ -777,20 +814,74 @@ async function main(): Promise<void> {
   const params: Record<string, number> = {};
   for (const p of strategy.params) params[p.key] = p.default;
 
-  // Restore softTrade from trade-history.json if bot restarted while a position was open.
-  // Without this, SL/TP monitoring is lost after any restart.
+  // ── Startup position sync ──────────────────────────────────────────────────
+  // trade-history.json is EPHEMERAL on Railway (lost on every restart).
+  // We always trust Binance as the source of truth:
+  //   1. If Binance is flat  → clear any stale "open" record from the file.
+  //   2. If Binance has a position → restore softTrade so SL/TP is monitored.
+  //      If the file has a matching open record, use its SL/TP values.
+  //      If not (file was lost), reconstruct SL/TP from current ATR.
   let restoredSoftTrade: SoftTrade | null = null;
-  const openTrade = loadTrades().find((t) => t.status === "open");
-  if (openTrade) {
-    restoredSoftTrade = {
-      id: openTrade.id,
-      side: openTrade.side,
-      qty: openTrade.qty,
-      sl: openTrade.sl,
-      tp: openTrade.tp,
-      entryPrice: openTrade.entryPrice,
-    };
-    log(`♻️  restored softTrade from history: ${openTrade.side} ${openTrade.qty} BTC  SL=$${openTrade.sl.toFixed(2)}  TP=$${openTrade.tp.toFixed(2)}`);
+
+  if (!cfg.dryRun) {
+    try {
+      const livePos = await getPosition(client, cfg.symbol);
+      const livePosAmt = livePos.positionAmt;
+      const openTrade = loadTrades().find((t) => t.status === "open");
+
+      if (livePosAmt === 0 && openTrade) {
+        // Binance is FLAT but file says open → stale record, clear it
+        warn(`startup: Binance is flat but file has open record — clearing stale entry`);
+        const trades = loadTrades();
+        for (const t of trades) {
+          if (t.status === "open") { t.status = "closed"; t.exitReason = "signal_exit"; t.exitTime = new Date().toISOString(); }
+        }
+        saveTrades(trades);
+        log(`startup: stale open record cleared`);
+
+      } else if (livePosAmt !== 0) {
+        const side: "BUY" | "SELL" = livePosAmt > 0 ? "BUY" : "SELL";
+        const qty = Math.abs(livePosAmt);
+        const entryPrice = livePos.entryPrice;
+
+        if (openTrade && openTrade.side === side) {
+          // File has a matching record — use its SL/TP
+          restoredSoftTrade = { id: openTrade.id, side, qty, sl: openTrade.sl, tp: openTrade.tp, entryPrice };
+          log(`♻️  restored softTrade from file: ${side} ${qty} BTC  entry=$${entryPrice.toFixed(2)}  SL=$${openTrade.sl.toFixed(2)}  TP=$${openTrade.tp.toFixed(2)}`);
+        } else {
+          // No matching file record (Railway ephemeral FS wiped it) — reconstruct from ATR
+          warn(`startup: Binance has ${side} ${qty} BTC position but no local record — reconstructing SL/TP from ATR`);
+          let sl: number, tp: number;
+          try {
+            const startupCandles = await fetchClosedCandles(client, cfg.symbol, cfg.interval, 100);
+            const atrSeries = atr(highsArr(startupCandles), lowsArr(startupCandles), closesArr(startupCandles), ATR_PERIOD);
+            const atrVal = atrSeries[atrSeries.length - 1] ?? 0;
+            const slDist = atrVal > 0 ? atrVal * ATR_MULT_SL : entryPrice * 0.02;
+            sl = side === "BUY" ? entryPrice - slDist : entryPrice + slDist;
+            tp = side === "BUY" ? entryPrice + slDist * RR_RATIO : entryPrice - slDist * RR_RATIO;
+          } catch {
+            // Fallback: ±2% SL, ±4% TP
+            sl = side === "BUY" ? entryPrice * 0.98 : entryPrice * 1.02;
+            tp = side === "BUY" ? entryPrice * 1.04 : entryPrice * 0.96;
+          }
+          const tradeId = recordOpen(cfg.symbol, side, qty, entryPrice, sl, tp);
+          restoredSoftTrade = { id: tradeId, side, qty, sl, tp, entryPrice };
+          log(`♻️  reconstructed softTrade: ${side} ${qty} BTC  entry=$${entryPrice.toFixed(2)}  SL=$${sl.toFixed(2)}  TP=$${tp.toFixed(2)}`);
+          await sendTelegram(
+            `⚠️ <b>Posisi ditemukan tanpa rekam lokal</b>\n` +
+            `${side === "BUY" ? "🟢 LONG" : "🔴 SHORT"} ${qty} ${cfg.symbol.replace("USDT", "")} @ $${entryPrice.toFixed(2)}\n` +
+            `SL (rekonstruksi ATR): $${sl.toFixed(2)}\n` +
+            `TP (rekonstruksi ATR): $${tp.toFixed(2)}\n\n` +
+            `Bot kini memonitor posisi ini.`
+          );
+        }
+      } else {
+        // Both flat — normal startup
+        log(`startup: Binance flat, no open record — clean start`);
+      }
+    } catch (e) {
+      warn(`startup position sync failed: ${(e as Error).message} — proceeding without sync`);
+    }
   }
 
   const state = {
@@ -821,7 +912,7 @@ async function main(): Promise<void> {
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
   const tgChatId = process.env.TELEGRAM_CHAT_ID;
   if (tgToken && tgChatId) {
-    startCommandPolling(tgToken, Number(tgChatId));
+    startCommandPolling(tgToken, Number(tgChatId), client, cfg);
   }
 
   let consecutiveErrors = 0;
