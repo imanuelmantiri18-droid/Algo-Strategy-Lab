@@ -215,8 +215,144 @@ async function sendTelegram(msg: string): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "HTML" }),
+      signal: AbortSignal.timeout(10_000),
     });
   } catch { /* never crash the bot for a notification */ }
+}
+
+// ---------------------------------------------------------------------------
+// TELEGRAM COMMAND BOT (polling — runs concurrently with the trading loop)
+// ---------------------------------------------------------------------------
+
+type TgUpdate = { update_id: number; message?: { chat: { id: number }; text?: string } };
+
+async function tgCall<T>(token: string, method: string, body: Record<string, unknown>, timeoutMs = 10_000): Promise<T> {
+  const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await res.json() as { ok: boolean; result: T };
+  if (!data.ok) throw new Error(`tg ${method}: ${JSON.stringify(data)}`);
+  return data.result;
+}
+
+function buildHistoryMsg(n: number): string {
+  let trades: TradeRecord[];
+  try { trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[]; }
+  catch { return "📭 Belum ada trade history."; }
+  if (trades.length === 0) return "📭 Belum ada trade history.";
+
+  const count = Math.min(20, Math.max(1, n));
+  const recent = trades.slice(-count).reverse();
+  const closed = trades.filter((t) => t.status === "closed");
+  const wins = closed.filter((t) => t.exitReason === "TP").length;
+  const losses = closed.filter((t) => t.exitReason === "SL").length;
+  const totalPnl = closed.reduce((a, t) => a + (t.pnl ?? 0), 0);
+  const winRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : "0";
+  const openCount = trades.filter((t) => t.status === "open").length;
+
+  let msg =
+    `📊 <b>Trade History</b> (${count} terakhir dari ${trades.length})\n` +
+    `───────────────────────\n` +
+    `Total PnL: <b>${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}</b>  |  Win Rate: ${winRate}%\n` +
+    `W/L: ${wins}/${losses}  |  Open: ${openCount}  |  Closed: ${closed.length}\n` +
+    `───────────────────────\n\n`;
+
+  for (let i = 0; i < recent.length; i++) {
+    const t = recent[i]!;
+    const side = t.side === "BUY" ? "🟢 LONG" : "🔴 SHORT";
+    const st = t.status === "open" ? "🔵 OPEN" : t.exitReason === "TP" ? "✅ TP" : t.exitReason === "SL" ? "❌ SL" : "🔄 EXIT";
+    const fmt = (iso: string) => iso.replace("T", " ").slice(0, 16) + " UTC";
+    msg +=
+      `<b>#${i + 1} ${side} — ${st}</b>\n` +
+      `Entry: <b>$${t.entryPrice.toFixed(2)}</b> @ ${fmt(t.entryTime)}\n` +
+      `SL: $${t.sl.toFixed(2)}  |  TP: $${t.tp.toFixed(2)}\n` +
+      (t.exitPrice !== undefined ? `Exit: $${t.exitPrice.toFixed(2)} @ ${fmt(t.exitTime!)}\n` : "") +
+      (t.pnl !== undefined ? `PnL: <b>${t.pnl >= 0 ? "+" : ""}$${t.pnl.toFixed(2)}</b>\n` : "") +
+      "\n";
+  }
+  return msg;
+}
+
+function startCommandPolling(token: string, allowedChatId: number): void {
+  let offset = 0;
+
+  const poll = async (): Promise<void> => {
+    try {
+      const updates = await tgCall<TgUpdate[]>(token, "getUpdates", {
+        offset,
+        timeout: 20,
+        allowed_updates: ["message"],
+      }, 25_000);
+
+      for (const u of updates) {
+        offset = u.update_id + 1;
+        const msg = u.message;
+        if (!msg?.text) continue;
+        if (msg.chat.id !== allowedChatId) continue;
+
+        const parts = msg.text.trim().split(/\s+/);
+        const cmd = (parts[0] ?? "").toLowerCase().replace(/@\S+/, "");
+        const args = parts.slice(1);
+
+        try {
+          if (cmd === "/history") {
+            const n = parseInt(args[0] ?? "5") || 5;
+            await tgCall(token, "sendMessage", {
+              chat_id: allowedChatId,
+              text: buildHistoryMsg(n),
+              parse_mode: "HTML",
+            });
+          } else if (cmd === "/status") {
+            let trades: TradeRecord[];
+            try { trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[]; }
+            catch { trades = []; }
+            const open = trades.find((t) => t.status === "open");
+            const closed = trades.filter((t) => t.status === "closed");
+            const wins = closed.filter((t) => t.exitReason === "TP").length;
+            const losses = closed.filter((t) => t.exitReason === "SL").length;
+            const totalPnl = closed.reduce((a, t) => a + (t.pnl ?? 0), 0);
+
+            let text = `📡 <b>Status Live Bot</b>\n───────────────────────\n`;
+            if (open) {
+              const side = open.side === "BUY" ? "🟢 LONG" : "🔴 SHORT";
+              const since = open.entryTime.replace("T", " ").slice(0, 16) + " UTC";
+              text += `Posisi: <b>${side}</b> ${open.qty} BTC\nEntry: $${open.entryPrice.toFixed(2)} @ ${since}\nSL: $${open.sl.toFixed(2)}  |  TP: $${open.tp.toFixed(2)}\n`;
+            } else {
+              text += `Posisi: <b>⚪ FLAT</b>\n`;
+            }
+            text +=
+              `───────────────────────\n` +
+              `Total PnL: <b>${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}</b>\n` +
+              `W/L: ${wins}/${losses}  |  Closed: ${closed.length}\n` +
+              `Strategy: fractal_breakout  |  TF: 1h`;
+            await tgCall(token, "sendMessage", { chat_id: allowedChatId, text, parse_mode: "HTML" });
+          } else if (cmd === "/help" || cmd === "/start") {
+            await tgCall(token, "sendMessage", {
+              chat_id: allowedChatId,
+              text:
+                `🤖 <b>Algo Bot — Perintah</b>\n\n` +
+                `/status         — posisi saat ini + statistik\n` +
+                `/history [N]    — N trade terakhir (default 5)\n` +
+                `/help           — tampilkan ini`,
+              parse_mode: "HTML",
+            });
+          }
+        } catch (e) {
+          log(`[tg-cmd] error handling ${cmd}: ${(e as Error).message}`);
+        }
+      }
+    } catch (e) {
+      log(`[tg-cmd] poll error: ${(e as Error).message} — retry in 5s`);
+      await sleep(5_000);
+    }
+    setTimeout(poll, 100);
+  };
+
+  poll().catch((e: unknown) => log(`[tg-cmd] fatal: ${(e as Error).message}`));
+  log("[tg-cmd] command polling started");
 }
 
 // ---------------------------------------------------------------------------
@@ -653,8 +789,16 @@ async function main(): Promise<void> {
     `Pair: <b>${cfg.symbol}</b>  |  TF: ${cfg.interval}\n` +
     `Leverage: ${cfg.leverage}x  |  Risk: ${cfg.riskPct}%\n` +
     `Mode: ${cfg.dryRun ? "DRY-RUN" : "LIVE TESTNET"}\n` +
-    `✅ Notifikasi Telegram aktif`
+    `✅ Notifikasi Telegram aktif\n` +
+    `💬 Kirim /help untuk perintah bot`
   );
+
+  // Start Telegram command polling concurrently with the trading loop.
+  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  const tgChatId = process.env.TELEGRAM_CHAT_ID;
+  if (tgToken && tgChatId) {
+    startCommandPolling(tgToken, Number(tgChatId));
+  }
 
   let consecutiveErrors = 0;
   while (true) {
