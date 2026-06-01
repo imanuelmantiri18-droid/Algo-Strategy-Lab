@@ -211,15 +211,29 @@ function err(...args: unknown[]): void { console.error(`[${ts()}] ✗`, ...args)
 async function sendTelegram(msg: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "HTML" }),
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch { /* never crash the bot for a notification */ }
+  if (!token || !chatId) {
+    warn("[tg] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — notification skipped");
+    return;
+  }
+  // Retry up to 3 times with 2s back-off so transient network blips don't lose critical alerts
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "HTML" }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      // Telegram always returns HTTP 200; actual errors are in the body
+      const body = await res.json() as { ok: boolean; description?: string };
+      if (body.ok) return; // success
+      warn(`[tg] API error (attempt ${attempt}/3): ${body.description ?? "unknown"}`);
+    } catch (e) {
+      warn(`[tg] fetch error (attempt ${attempt}/3): ${(e as Error).message}`);
+    }
+    if (attempt < 3) await sleep(2_000);
+  }
+  err("[tg] notification FAILED after 3 attempts — check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID");
 }
 
 // ---------------------------------------------------------------------------
