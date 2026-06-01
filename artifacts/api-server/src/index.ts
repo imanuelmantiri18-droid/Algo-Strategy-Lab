@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startTelegramPolling } from "./lib/telegramPolling";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,7 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Start Telegram bot polling in background (silent if env vars not set)
+  startTelegramPolling().catch(() => {});
 });
