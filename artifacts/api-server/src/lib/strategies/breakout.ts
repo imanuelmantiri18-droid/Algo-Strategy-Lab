@@ -237,11 +237,18 @@ export const BREAKOUT_STRATEGIES: StrategyDef[] = [
       let pos: Signal = 0;
       let lastUp = Infinity;
       let lastDn = -Infinity;
-      for (let i = 2; i < candles.length - 2; i++) {
-        const isUp = h[i]! > h[i - 1]! && h[i]! > h[i - 2]! && h[i]! > h[i + 1]! && h[i]! > h[i + 2]!;
-        const isDn = l[i]! < l[i - 1]! && l[i]! < l[i - 2]! && l[i]! < l[i + 1]! && l[i]! < l[i + 2]!;
-        if (isUp) lastUp = h[i]!;
-        if (isDn) lastDn = l[i]!;
+      for (let i = 2; i < candles.length; i++) {
+        // Fractal detection requires 2 confirmed bars to the right.
+        // Only run it when those bars exist to avoid out-of-bounds reads.
+        if (i < candles.length - 2) {
+          const isUp = h[i]! > h[i - 1]! && h[i]! > h[i - 2]! && h[i]! > h[i + 1]! && h[i]! > h[i + 2]!;
+          const isDn = l[i]! < l[i - 1]! && l[i]! < l[i - 2]! && l[i]! < l[i + 1]! && l[i]! < l[i + 2]!;
+          if (isUp) lastUp = h[i]!;
+          if (isDn) lastDn = l[i]!;
+        }
+        // Breakout check runs on every bar including the last 2 — the live bot
+        // reads signals[signals.length - 1] so this must always reflect the
+        // current position rather than being stuck at the initial 0.
         if (h[i]! > lastUp && lastUp !== Infinity) {
           pos = 1;
           lastUp = Infinity;
