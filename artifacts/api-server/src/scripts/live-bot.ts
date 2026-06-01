@@ -250,7 +250,7 @@ class BinanceTestnetClient {
     path: string,
     params: Record<string, string | number | boolean> = {},
   ): Promise<T> {
-    const merged: Record<string, string> = { recvWindow: "5000", timestamp: String(Date.now()) };
+    const merged: Record<string, string> = { recvWindow: "10000", timestamp: String(Date.now()) };
     for (const [k, v] of Object.entries(params)) merged[k] = String(v);
     const qs = new URLSearchParams(merged).toString();
     const signature = this.sign(qs);
@@ -617,9 +617,25 @@ async function main(): Promise<void> {
   const params: Record<string, number> = {};
   for (const p of strategy.params) params[p.key] = p.default;
 
+  // Restore softTrade from trade-history.json if bot restarted while a position was open.
+  // Without this, SL/TP monitoring is lost after any restart.
+  let restoredSoftTrade: SoftTrade | null = null;
+  const openTrade = loadTrades().find((t) => t.status === "open");
+  if (openTrade) {
+    restoredSoftTrade = {
+      id: openTrade.id,
+      side: openTrade.side,
+      qty: openTrade.qty,
+      sl: openTrade.sl,
+      tp: openTrade.tp,
+      entryPrice: openTrade.entryPrice,
+    };
+    log(`♻️  restored softTrade from history: ${openTrade.side} ${openTrade.qty} BTC  SL=$${openTrade.sl.toFixed(2)}  TP=$${openTrade.tp.toFixed(2)}`);
+  }
+
   const state = {
     lastActedCandleTime: "",
-    softTrade: null as SoftTrade | null,
+    softTrade: restoredSoftTrade,
     strategy,
     params,
   };
