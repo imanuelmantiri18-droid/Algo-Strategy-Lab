@@ -655,10 +655,25 @@ async function runTick(
     `signal=${latestSignal}  position=${currentPos} (${currentPosAmt} BTC, uPnL $${pos.unrealizedProfit.toFixed(2)})`,
   );
 
-  // 7. If flat but softTrade still set, position was closed externally.
+  // 7. If flat but softTrade still set, position was closed externally
+  //    (TP/SL hit on exchange, manual close, liquidation, etc.).
+  //    We must record the close AND notify — otherwise file stays OPEN forever.
   if (currentPos === 0 && state.softTrade) {
-    log("position closed externally — clearing softTrade state");
+    const { id, side, entryPrice, qty } = state.softTrade;
+    // Approximate PnL from mark price since unrealizedProfit is 0 when position is flat
+    const approxPnl = side === "BUY"
+      ? (markPrice - entryPrice) * qty
+      : (entryPrice - markPrice) * qty;
+    log(`⚠️ position closed externally (manual/liquidation/exchange SL)  approxPnL=${approxPnl >= 0 ? "+" : ""}$${approxPnl.toFixed(2)}`);
+    recordClose(id, markPrice, "external_close", approxPnl);
     state.softTrade = null;
+    await sendTelegram(
+      `⚠️ <b>${side === "BUY" ? "LONG" : "SHORT"} DITUTUP EKSTERNAL</b>\n` +
+      `Pair: <b>${cfg.symbol}</b>\n` +
+      `Posisi ditutup di luar bot (manual / exchange stop / likuidasi)\n` +
+      `Exit mark: <b>$${markPrice.toFixed(2)}</b>\n` +
+      `Est. PnL: <b>${approxPnl >= 0 ? "+" : ""}$${approxPnl.toFixed(2)}</b>`
+    );
   }
 
   // 8. Already acted on this candle → skip.
