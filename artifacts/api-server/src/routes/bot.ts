@@ -1,16 +1,19 @@
 import { Router, type IRouter } from "express";
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import pg from "pg";
 import { getStrategy, atr, highsArr, lowsArr, closesArr } from "../lib/strategies";
 import type { Candle, Interval } from "../types/strategy";
 import { INTERVAL_MS } from "../types/strategy";
 
-const TRADES_FILE = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../trade-history.json",
-);
+let _botPool: pg.Pool | null = null;
+function getBotPool(): pg.Pool | null {
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+  if (!_botPool) {
+    _botPool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 2 });
+  }
+  return _botPool;
+}
 
 const router: IRouter = Router();
 
@@ -156,13 +159,37 @@ router.get("/bot/candles", async (req, res, next) => {
   }
 });
 
-// GET /api/bot/trades — returns persisted trade history (written by live-bot.ts)
-router.get("/bot/trades", (_req, res) => {
+// GET /api/bot/trades — returns persisted trade history from PostgreSQL
+router.get("/bot/trades", async (req, res, next) => {
   try {
-    const trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8"));
+    const db = getBotPool();
+    if (!db) { res.json({ trades: [] }); return; }
+    const symbol = typeof req.query.symbol === "string" ? req.query.symbol : "BTCUSDT";
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const { rows } = await db.query(
+      `SELECT id, symbol, side, qty::float, entry_time, entry_price::float, sl::float, tp::float,
+              exit_time, exit_price::float, exit_reason, pnl::float, status, created_at
+       FROM bot_trades WHERE symbol=$1 ORDER BY entry_time DESC LIMIT $2`,
+      [symbol, limit],
+    );
+    const trades = (rows as Record<string, unknown>[]).map((r) => ({
+      id: r.id,
+      symbol: r.symbol,
+      side: r.side,
+      qty: r.qty,
+      entryTime: r.entry_time instanceof Date ? r.entry_time.toISOString() : String(r.entry_time),
+      entryPrice: r.entry_price,
+      sl: r.sl,
+      tp: r.tp,
+      exitTime: r.exit_time ? (r.exit_time instanceof Date ? r.exit_time.toISOString() : String(r.exit_time)) : undefined,
+      exitPrice: r.exit_price ?? undefined,
+      exitReason: r.exit_reason ?? undefined,
+      pnl: r.pnl ?? undefined,
+      status: r.status,
+    }));
     res.json({ trades });
-  } catch {
-    res.json({ trades: [] });
+  } catch (e) {
+    next(e);
   }
 });
 
