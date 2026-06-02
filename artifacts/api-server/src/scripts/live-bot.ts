@@ -704,14 +704,17 @@ async function runTick(
   if (currentPos !== 0) {
     log(`closing existing ${currentPos > 0 ? "LONG" : "SHORT"} (${currentPosAmt} BTC)…`);
     const exitSide: "BUY" | "SELL" = currentPosAmt > 0 ? "SELL" : "BUY";
+    // Capture PnL BEFORE placing the close order (unrealizedProfit becomes 0 after close)
+    const signalExitPnl = pos.unrealizedProfit;
     await placeMarketOrder(client, cfg.symbol, exitSide, Math.abs(currentPosAmt), meta, true);
     if (state.softTrade) {
-      recordClose(state.softTrade.id, markPrice, "signal_exit");
+      recordClose(state.softTrade.id, markPrice, "signal_exit", signalExitPnl);
       await sendTelegram(
         `🔄 <b>${state.softTrade.side === "BUY" ? "LONG" : "SHORT"} DITUTUP — SIGNAL BALIK</b>\n` +
         `Pair: <b>${cfg.symbol}</b>\n` +
         `Exit: <b>$${markPrice.toFixed(2)}</b>\n` +
-        `Entry: $${state.softTrade.entryPrice.toFixed(2)}`
+        `Entry: $${state.softTrade.entryPrice.toFixed(2)}\n` +
+        `PnL: <b>${signalExitPnl >= 0 ? "+" : ""}$${signalExitPnl.toFixed(2)}</b>`
       );
     }
     state.softTrade = null;
