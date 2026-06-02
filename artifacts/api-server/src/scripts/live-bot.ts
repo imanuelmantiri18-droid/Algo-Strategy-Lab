@@ -35,11 +35,9 @@
  */
 
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import pg from "pg";
 import {
   STRATEGIES,
   getStrategy,
@@ -61,14 +59,9 @@ const ATR_MULT_SL = 1.5;
 const RR_RATIO = 2;
 const POLL_INTERVAL_MS = 5_000;
 
-// Trade history file — shared with the API server route /api/bot/trades.
-const TRADES_FILE = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../trade-history.json",
-);
-
 // ---------------------------------------------------------------------------
-// TRADE HISTORY (persisted to file so UI shows history across restarts)
+// TRADE HISTORY — PostgreSQL (persistent across Railway restarts)
+// Falls back to no-op logging if DATABASE_URL is not configured.
 // ---------------------------------------------------------------------------
 
 export type TradeRecord = {
@@ -82,71 +75,118 @@ export type TradeRecord = {
   tp: number;
   exitTime?: string;
   exitPrice?: number;
-  exitReason?: "SL" | "TP" | "signal_exit";
+  exitReason?: "SL" | "TP" | "signal_exit" | "external_close";
   pnl?: number;
   status: "open" | "closed";
 };
 
-function loadTrades(): TradeRecord[] {
-  try {
-    return JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[];
-  } catch {
-    return [];
+let _pool: pg.Pool | null = null;
+
+function getPool(): pg.Pool | null {
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+  if (!_pool) {
+    _pool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 3 });
+    _pool.on("error", (e: Error) => warn(`[db] pool error: ${e.message}`));
   }
+  return _pool;
 }
 
-function saveTrades(trades: TradeRecord[]): void {
-  try {
-    fs.writeFileSync(TRADES_FILE, JSON.stringify(trades, null, 2));
-  } catch (e) {
-    warn(`could not save trades: ${(e as Error).message}`);
-  }
+function rowToRecord(r: Record<string, unknown>): TradeRecord {
+  return {
+    id: String(r["id"]),
+    symbol: String(r["symbol"]),
+    side: r["side"] as "BUY" | "SELL",
+    qty: Number(r["qty"]),
+    entryTime: r["entry_time"] instanceof Date ? r["entry_time"].toISOString() : String(r["entry_time"]),
+    entryPrice: Number(r["entry_price"]),
+    sl: Number(r["sl"]),
+    tp: Number(r["tp"]),
+    exitTime: r["exit_time"] ? (r["exit_time"] instanceof Date ? r["exit_time"].toISOString() : String(r["exit_time"])) : undefined,
+    exitPrice: r["exit_price"] != null ? Number(r["exit_price"]) : undefined,
+    exitReason: r["exit_reason"] as TradeRecord["exitReason"],
+    pnl: r["pnl"] != null ? Number(r["pnl"]) : undefined,
+    status: r["status"] as "open" | "closed",
+  };
 }
 
-function recordOpen(
-  symbol: string,
-  side: "BUY" | "SELL",
-  qty: number,
-  entryPrice: number,
-  sl: number,
-  tp: number,
-): string {
-  const trades = loadTrades();
-  // Close any stale open records (shouldn't happen, but safety net).
-  for (const t of trades) {
-    if (t.status === "open") {
-      t.status = "closed";
-      t.exitReason = "signal_exit";
-      t.exitTime = new Date().toISOString();
-    }
-  }
+async function dbGetOpenTrade(symbol: string): Promise<TradeRecord | null> {
+  const db = getPool();
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM bot_trades WHERE symbol=$1 AND status='open' ORDER BY entry_time DESC LIMIT 1`,
+      [symbol],
+    );
+    return rows[0] ? rowToRecord(rows[0] as Record<string, unknown>) : null;
+  } catch (e) { warn(`[db] getOpenTrade: ${(e as Error).message}`); return null; }
+}
+
+async function dbGetTrades(symbol: string, limit = 50): Promise<TradeRecord[]> {
+  const db = getPool();
+  if (!db) return [];
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM bot_trades WHERE symbol=$1 ORDER BY entry_time DESC LIMIT $2`,
+      [symbol, limit],
+    );
+    return (rows as Record<string, unknown>[]).map(rowToRecord);
+  } catch (e) { warn(`[db] getTrades: ${(e as Error).message}`); return []; }
+}
+
+async function recordOpen(
+  symbol: string, side: "BUY" | "SELL", qty: number,
+  entryPrice: number, sl: number, tp: number,
+): Promise<string> {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  trades.push({ id, symbol, side, qty, entryTime: new Date().toISOString(), entryPrice, sl, tp, status: "open" });
-  saveTrades(trades);
+  const db = getPool();
+  if (!db) { warn("[db] DATABASE_URL not set — trade not persisted"); return id; }
+  try {
+    await db.query(
+      `UPDATE bot_trades SET status='closed', exit_reason='signal_exit', exit_time=NOW() WHERE symbol=$1 AND status='open'`,
+      [symbol],
+    );
+    await db.query(
+      `INSERT INTO bot_trades (id, symbol, side, qty, entry_time, entry_price, sl, tp, status)
+       VALUES ($1,$2,$3,$4,NOW(),$5,$6,$7,'open')`,
+      [id, symbol, side, qty, entryPrice, sl, tp],
+    );
+  } catch (e) { warn(`[db] recordOpen: ${(e as Error).message}`); }
   return id;
 }
 
-function recordClose(
-  tradeId: string,
-  exitPrice: number,
-  exitReason: "SL" | "TP" | "signal_exit",
+async function recordClose(
+  tradeId: string, exitPrice: number,
+  exitReason: "SL" | "TP" | "signal_exit" | "external_close",
   actualPnl?: number,
-): void {
-  const trades = loadTrades();
-  const t = trades.find((x) => x.id === tradeId);
-  if (!t) return;
-  // Prefer actualPnl from Binance (leveraged, fee-adjusted) over local estimate
-  const priceDiff = t.side === "BUY" ? exitPrice - t.entryPrice : t.entryPrice - exitPrice;
-  const pnl = actualPnl ?? priceDiff * t.qty;
-  Object.assign(t, {
-    exitTime: new Date().toISOString(),
-    exitPrice,
-    exitReason,
-    pnl,
-    status: "closed",
-  });
-  saveTrades(trades);
-  log(`📒 trade recorded: ${t.side} ${t.qty} BTC  entry=$${t.entryPrice.toFixed(2)}  exit=$${exitPrice.toFixed(2)}  pnl=${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}  reason=${exitReason}`);
+): Promise<void> {
+  const db = getPool();
+  if (!db) { warn("[db] DATABASE_URL not set — close not persisted"); return; }
+  try {
+    const { rows } = await db.query(`SELECT * FROM bot_trades WHERE id=$1`, [tradeId]);
+    const t = rows[0] as Record<string, unknown> | undefined;
+    if (!t) return;
+    const priceDiff = t["side"] === "BUY"
+      ? exitPrice - Number(t["entry_price"])
+      : Number(t["entry_price"]) - exitPrice;
+    const pnl = actualPnl ?? priceDiff * Number(t["qty"]);
+    await db.query(
+      `UPDATE bot_trades SET status='closed', exit_time=NOW(), exit_price=$1, exit_reason=$2, pnl=$3 WHERE id=$4`,
+      [exitPrice, exitReason, pnl, tradeId],
+    );
+    log(`📒 trade recorded: ${t["side"]} ${t["qty"]} BTC  entry=$${Number(t["entry_price"]).toFixed(2)}  exit=$${exitPrice.toFixed(2)}  pnl=${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}  reason=${exitReason}`);
+  } catch (e) { warn(`[db] recordClose: ${(e as Error).message}`); }
+}
+
+async function dbClearStaleOpen(symbol: string): Promise<void> {
+  const db = getPool();
+  if (!db) return;
+  try {
+    await db.query(
+      `UPDATE bot_trades SET status='closed', exit_reason='signal_exit', exit_time=NOW() WHERE symbol=$1 AND status='open'`,
+      [symbol],
+    );
+  } catch (e) { warn(`[db] clearStaleOpen: ${(e as Error).message}`); }
 }
 
 // ---------------------------------------------------------------------------
@@ -254,14 +294,12 @@ async function tgCall<T>(token: string, method: string, body: Record<string, unk
   return data.result;
 }
 
-function buildHistoryMsg(n: number): string {
-  let trades: TradeRecord[];
-  try { trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[]; }
-  catch { return "📭 Belum ada trade history."; }
+async function buildHistoryMsg(symbol: string, n: number): Promise<string> {
+  const trades = await dbGetTrades(symbol, 50);
   if (trades.length === 0) return "📭 Belum ada trade history.";
 
   const count = Math.min(20, Math.max(1, n));
-  const recent = trades.slice(-count).reverse();
+  const recent = trades.slice(0, count); // already DESC order from DB
   const closed = trades.filter((t) => t.status === "closed");
   const wins = closed.filter((t) => t.exitReason === "TP").length;
   const losses = closed.filter((t) => t.exitReason === "SL").length;
@@ -324,7 +362,7 @@ function startCommandPolling(
             const n = parseInt(args[0] ?? "5") || 5;
             await tgCall(token, "sendMessage", {
               chat_id: allowedChatId,
-              text: buildHistoryMsg(n),
+              text: await buildHistoryMsg(cfg.symbol, n),
               parse_mode: "HTML",
             });
           } else if (cmd === "/status") {
@@ -342,15 +380,14 @@ function startCommandPolling(
               const posLabel = posAmt > 0 ? "🟢 LONG" : posAmt < 0 ? "🔴 SHORT" : "⚪ FLAT";
               const base = cfg.symbol.replace("USDT", "");
 
-              // Trade history stats from file (for W/L counts only)
-              let trades: TradeRecord[] = [];
-              try { trades = JSON.parse(fs.readFileSync(TRADES_FILE, "utf-8")) as TradeRecord[]; } catch { /* ok */ }
+              // Trade history stats from DB (W/L counts + SL/TP levels)
+              const trades = await dbGetTrades(cfg.symbol, 200);
               const closed = trades.filter((t) => t.status === "closed");
               const wins = closed.filter((t) => t.exitReason === "TP").length;
               const losses = closed.filter((t) => t.exitReason === "SL").length;
               const totalPnl = closed.reduce((a, t) => a + (t.pnl ?? 0), 0);
 
-              // Find matching open trade in file for SL/TP (if available)
+              // Find open trade record in DB for SL/TP levels
               const openRec = trades.find((t) => t.status === "open");
 
               let text = `📡 <b>Status Live Bot</b>\n───────────────────────\n`;
@@ -608,7 +645,7 @@ async function runTick(
         const exitSide: "BUY" | "SELL" = side === "BUY" ? "SELL" : "BUY";
         // Use actual positionAmt from Binance, not softTrade qty, to avoid reduceOnly rejection
         await placeMarketOrder(client, cfg.symbol, exitSide, Math.abs(currentPosAmt), meta, true);
-        recordClose(id, markPrice, exitReason, actualPnl);
+        await recordClose(id, markPrice, exitReason, actualPnl);
       }
       state.softTrade = null;
       log(`✓ position closed via software ${exitReason}  PnL=${actualPnl >= 0 ? "+" : ""}$${actualPnl.toFixed(2)}`);
@@ -665,7 +702,7 @@ async function runTick(
       ? (markPrice - entryPrice) * qty
       : (entryPrice - markPrice) * qty;
     log(`⚠️ position closed externally (manual/liquidation/exchange SL)  approxPnL=${approxPnl >= 0 ? "+" : ""}$${approxPnl.toFixed(2)}`);
-    recordClose(id, markPrice, "external_close", approxPnl);
+    await recordClose(id, markPrice, "external_close", approxPnl);
     state.softTrade = null;
     await sendTelegram(
       `⚠️ <b>${side === "BUY" ? "LONG" : "SHORT"} DITUTUP EKSTERNAL</b>\n` +
@@ -708,7 +745,7 @@ async function runTick(
     const signalExitPnl = pos.unrealizedProfit;
     await placeMarketOrder(client, cfg.symbol, exitSide, Math.abs(currentPosAmt), meta, true);
     if (state.softTrade) {
-      recordClose(state.softTrade.id, markPrice, "signal_exit", signalExitPnl);
+      await recordClose(state.softTrade.id, markPrice, "signal_exit", signalExitPnl);
       await sendTelegram(
         `🔄 <b>${state.softTrade.side === "BUY" ? "LONG" : "SHORT"} DITUTUP — SIGNAL BALIK</b>\n` +
         `Pair: <b>${cfg.symbol}</b>\n` +
@@ -771,8 +808,8 @@ async function runTick(
     const actualSl = side === "BUY" ? fillPrice - actualSlDist : fillPrice + actualSlDist;
     const actualTp = side === "BUY" ? fillPrice + actualTpDist : fillPrice - actualTpDist;
 
-    // Persist to trade history file using actual fill values.
-    const tradeId = recordOpen(cfg.symbol, side, fillQty, fillPrice, actualSl, actualTp);
+    // Persist to DB using actual fill values.
+    const tradeId = await recordOpen(cfg.symbol, side, fillQty, fillPrice, actualSl, actualTp);
     state.softTrade = { id: tradeId, side, qty: fillQty, sl: actualSl, tp: actualTp, entryPrice: fillPrice };
 
     log(`✓ entered ${side} ${fillQty} BTC @ fill $${fillPrice.toFixed(2)}  (candle close $${last.c.toFixed(2)})`);
@@ -809,7 +846,7 @@ async function main(): Promise<void> {
   log(`Risk/trade:  ${cfg.riskPct}%`);
   log(`Capital:     $${cfg.capital} USDT (sizing basis)`);
   log(`SL/TP:       software-enforced (checked every ${POLL_INTERVAL_MS / 1000}s)`);
-  log(`Trade log:   ${TRADES_FILE}`);
+  log(`Trade log:   PostgreSQL bot_trades table (DATABASE_URL ${process.env.DATABASE_URL ? "set ✓" : "NOT SET — trades won't persist"})`);
   log(`Mode:        ${cfg.dryRun ? "DRY-RUN (no orders)" : "LIVE on TESTNET"}`);
   log("─────────────────────────────────────────────────────");
 
@@ -859,16 +896,12 @@ async function main(): Promise<void> {
     try {
       const livePos = await getPosition(client, cfg.symbol);
       const livePosAmt = livePos.positionAmt;
-      const openTrade = loadTrades().find((t) => t.status === "open");
+      const openTrade = await dbGetOpenTrade(cfg.symbol);
 
       if (livePosAmt === 0 && openTrade) {
-        // Binance is FLAT but file says open → stale record, clear it
-        warn(`startup: Binance is flat but file has open record — clearing stale entry`);
-        const trades = loadTrades();
-        for (const t of trades) {
-          if (t.status === "open") { t.status = "closed"; t.exitReason = "signal_exit"; t.exitTime = new Date().toISOString(); }
-        }
-        saveTrades(trades);
+        // Binance is FLAT but DB says open → stale record, clear it
+        warn(`startup: Binance is flat but DB has open record — clearing stale entry`);
+        await dbClearStaleOpen(cfg.symbol);
         log(`startup: stale open record cleared`);
 
       } else if (livePosAmt !== 0) {
@@ -896,7 +929,7 @@ async function main(): Promise<void> {
             sl = side === "BUY" ? entryPrice * 0.98 : entryPrice * 1.02;
             tp = side === "BUY" ? entryPrice * 1.04 : entryPrice * 0.96;
           }
-          const tradeId = recordOpen(cfg.symbol, side, qty, entryPrice, sl, tp);
+          const tradeId = await recordOpen(cfg.symbol, side, qty, entryPrice, sl, tp);
           restoredSoftTrade = { id: tradeId, side, qty, sl, tp, entryPrice };
           log(`♻️  reconstructed softTrade: ${side} ${qty} BTC  entry=$${entryPrice.toFixed(2)}  SL=$${sl.toFixed(2)}  TP=$${tp.toFixed(2)}`);
           await sendTelegram(
