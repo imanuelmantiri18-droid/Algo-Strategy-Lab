@@ -237,18 +237,25 @@ export const BREAKOUT_STRATEGIES: StrategyDef[] = [
       let pos: Signal = 0;
       let lastUp = Infinity;
       let lastDn = -Infinity;
-      for (let i = 2; i < candles.length; i++) {
-        // Fractal detection requires 2 confirmed bars to the right.
-        // Only run it when those bars exist to avoid out-of-bounds reads.
-        if (i < candles.length - 2) {
-          const isUp = h[i]! > h[i - 1]! && h[i]! > h[i - 2]! && h[i]! > h[i + 1]! && h[i]! > h[i + 2]!;
-          const isDn = l[i]! < l[i - 1]! && l[i]! < l[i - 2]! && l[i]! < l[i + 1]! && l[i]! < l[i + 2]!;
-          if (isUp) lastUp = h[i]!;
-          if (isDn) lastDn = l[i]!;
-        }
-        // Breakout check runs on every bar including the last 2 — the live bot
-        // reads signals[signals.length - 1] so this must always reflect the
-        // current position rather than being stuck at the initial 0.
+      // BIAS-FIXED: 2026-06-02 — detect fractal for bar i-2 using only
+      // bars i-4..i (all already closed). No future data accessed.
+      // At bar i we know h[i-1] and h[i] which are the 2 "right" bars
+      // needed to confirm the fractal centred at i-2.
+      for (let i = 4; i < candles.length; i++) {
+        const isUp =
+          h[i - 2]! > h[i - 4]! &&
+          h[i - 2]! > h[i - 3]! &&
+          h[i - 2]! > h[i - 1]! &&  // 1 bar right (already closed)
+          h[i - 2]! > h[i]!;        // 2 bars right (already closed)
+        const isDn =
+          l[i - 2]! < l[i - 4]! &&
+          l[i - 2]! < l[i - 3]! &&
+          l[i - 2]! < l[i - 1]! &&
+          l[i - 2]! < l[i]!;
+        if (isUp) lastUp = h[i - 2]!;
+        if (isDn) lastDn = l[i - 2]!;
+
+        // Breakout check at current bar i — all data is past/present.
         if (h[i]! > lastUp && lastUp !== Infinity) {
           pos = 1;
           lastUp = Infinity;
